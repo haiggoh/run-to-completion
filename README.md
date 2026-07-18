@@ -29,12 +29,12 @@ makes it available anywhere, and toggleable independently of everything else.
 ## Install — Claude Code (one-click)
 
 ```
-/plugin marketplace add haiggoh/claude-code-desktop-sync
+/plugin marketplace add haiggoh/get-haiggoh
 /plugin install run-to-completion@haiggoh
 ```
 
 > The `haiggoh` marketplace catalog is hosted in the
-> [`claude-code-desktop-sync`](https://github.com/haiggoh/claude-code-desktop-sync) repo
+> [`get-haiggoh`](https://github.com/haiggoh/get-haiggoh) repo
 > (it lists several `haiggoh` plugins). Add the marketplace once from there, then install
 > `run-to-completion` by name. This repo ships the plugin itself, not a marketplace catalog.
 
