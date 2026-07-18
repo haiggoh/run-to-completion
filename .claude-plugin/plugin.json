@@ -1,6 +1,6 @@
 {
   "name": "run-to-completion",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Offer continuous, autonomous execution for elaborate multi-step work: ask blocking matter-of-taste questions up front, then run the plan to completion without stopping between steps, folding in mid-run prompts at natural task seams.",
   "author": { "name": "Heiko Brantsch" },
   "homepage": "https://github.com/haiggoh/run-to-completion",
