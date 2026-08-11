@@ -1,6 +1,6 @@
 ---
 name: run-to-completion
-description: Use when facing an elaborate multi-step plan or several open projects AND most of the needed information is already gathered, or when the user signals "autonomous" / "continuous" / "full auto" / "run to completion" / "keep going without stopping". Proactively offer to execute the plan continuously, without pausing between steps, resolving routine decisions yourself instead of asking. Do not trigger for a single straightforward task or when requirements are still unclear — offer this mode, don't force it.
+description: Use when the work already in view in THIS conversation is an elaborate multi-step plan or spans several open projects AND most of the needed information is gathered, or when the user signals "autonomous" / "continuous" / "full auto" / "run to completion" / "keep going without stopping". Proactively offer to execute that plan continuously, without pausing between steps, resolving routine decisions yourself instead of asking. Do not trigger for a single straightforward task or when requirements are still unclear — offer this mode, don't force it. For a whole standing QUEUE of open items to be cleared unattended, start at autopilot instead.
 ---
 
 # Run to Completion

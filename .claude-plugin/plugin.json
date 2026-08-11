@@ -1,9 +1,9 @@
 {
   "name": "run-to-completion",
-  "version": "0.1.1",
-  "description": "Offer continuous, autonomous execution for elaborate multi-step work: ask blocking matter-of-taste questions up front, then run the plan to completion without stopping between steps, folding in mid-run prompts at natural task seams.",
+  "version": "0.2.0",
+  "description": "Run a queue of open work to completion unattended: triage it into do-now / heavy / gated tiers, execute the autonomous pile without stopping between items, and close out with a gated list saying why each remaining item was left. Includes an autopilot orchestrator and an attended pass for clearing blockers.",
   "author": { "name": "Heiko Brantsch" },
   "homepage": "https://github.com/haiggoh/run-to-completion",
   "license": "MIT",
-  "keywords": ["skill", "hook", "behavior", "autonomy", "planning", "execution", "workflow"]
+  "keywords": ["skill", "hook", "behavior", "autonomy", "planning", "execution", "workflow", "autopilot", "triage", "unattended", "queue"]
 }
