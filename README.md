@@ -13,10 +13,10 @@ close out with an honest account of what was left and why.
 | Skill | Phase | Owns |
 |---|---|---|
 | `autopilot` | whole run | Entry point for "run everything you can while I'm away." Sequences the three phases below as an explicit checklist, plus the up-front kickoff. |
-| `triage-for-autonomy` | before | Scores any queue — a to-do list, an issue tracker, plan steps, a persistent open-items store — into **do-now** / **autonomous-but-heavy** / **gated**, recording a gate reason per blocked item. |
+| `triage-for-autonomy` | before | Scores any queue — a to-do list, an issue tracker, plan steps, a persistent open-items store — into **do-now** / **autonomous-but-heavy** / **gated**, recording a gate reason per blocked item, and ranking the gated pile by how cheaply each one could be released. |
 | `execute-unattended` | during | Keeping moving: wrap-and-switch the instant something needs a human, reversibility before touching a file, and the ship loop that carries a change through to confirmed-live in the *installed* copy. |
 | `close-out-the-run` | after | Reconcile the durable records the run touched, stop cleanly at the gated boundary instead of churning, and write a wrap whose gated list says why each remaining item was left and how to resume it. |
-| `ungate-queue` | attended | The other half: walks the **blocked** pile *with* you, turning each gate reason into the one question that releases it. |
+| `ungate-queue` | attended | The other half: walks the **blocked** pile *with* you, cheapest gate first, turning each gate reason into the one question that releases it — then **records the answer and stops**. It removes gates; it does not do the work it releases. |
 | `run-to-completion` | offer | The original rule, for a plan already in view in the conversation: offer continuous execution, ask blocking matter-of-taste questions up front, fold mid-run prompts in at task seams. |
 
 Plus a one-line, stateless **SessionStart hook** that reminds Claude the skills
@@ -28,7 +28,7 @@ no state written anywhere — purely reactive.
 ```
 kickoff  → establish the resource picture, warm any delegate,
            ask every blocking question ONCE
-triage   → tier 1 do-now │ tier 2 heavy │ gated (+ reason)
+triage   → tier 1 do-now │ tier 2 heavy │ gated (+ reason, + how cheap to release)
 execute  → do tier 1, wrap-and-switch on any gate, re-triage between batches
 close    → reconcile records, pause rather than churn,
            wrap with a GATED list + how to resume each item
@@ -37,6 +37,33 @@ close    → reconcile records, pause rather than churn,
 The gated list is the highest-value output. It turns "I stopped" into a menu you
 can act on in seconds — and it is nearly free, because triage already recorded
 why each item was blocked.
+
+## The attended half is deliberately narrow
+
+`ungate-queue` is the pass you run when *you* are in the room. It spends your
+**attention**, not compute — which is what makes it the affordable pass when
+compute is scarce or metered. That only holds while it stays cheap, so the skill
+draws a hard boundary: ask the one question, write the answer onto the item,
+retier it, move on. It handles **only the first gate**, and it does not open the
+files. The work it releases goes back into the queue for the next `autopilot` run.
+
+To make sure the best questions get asked first, the gated pile is not flat:
+
+| | The gate is… | Worth asking? |
+|---|---|---|
+| **G1** | one answer away from being gone permanently | first, always |
+| **G2** | a setup step an existing script already performs | cheap, yes |
+| **G3** | a custom installation needing real work | after G1/G2 |
+| **G4** | a human interacting throughout — no answer releases it | attended work, not ungating |
+| **ENV** | a recurring external precondition (an app open, a network joined) | ask only "is it true now?" — never solvable |
+
+An item that is *not* gated now but expects a gate later is not on this list at
+all: it is promoted straight into the actionable queue with a note saying where it
+will stop, because work that can proceed should.
+
+The tier is persisted as a short marker on the front of the gate reason the queue
+already stores — so judging is one-time rather than per-run, there is exactly one
+record of gate state, and any view that prints a gate reason shows the tier free.
 
 ## What this does **not** relax
 

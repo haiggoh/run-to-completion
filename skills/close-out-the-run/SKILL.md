@@ -36,7 +36,7 @@ Pause any persistent goal or session-continuation mechanism. Do not leave it run
 The wrap has a required shape:
 1. What closed, what advanced, what shipped.
 2. What the run consumed.
-3. **A GATED list:** Every remaining item with the reason it could not be done autonomously (needs user input, needs a supervised session, needs a download, is a design/taste decision, needs a fresh session) and the concrete next action that would unblock it.
+3. **A GATED list:** Every remaining item with the reason it could not be done autonomously (needs user input, needs a supervised session, needs a download, is a design/taste decision, needs a fresh session) and the concrete next action that would unblock it. Order this list cheapest-to-release first, and carry whatever ungate tier triage recorded — that ordering is what makes the list answerable in one sitting rather than merely readable. Say separately which items are attended-only and which are waiting on a recurring external condition; neither is a failure to unblock.
 
 ## Why the gated list matters
 

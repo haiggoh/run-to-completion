@@ -93,5 +93,44 @@ for f in "$SKILLS"/*/SKILL.md; do
 done
 r=0; [ "$missing" -eq 0 ] || r=1; check $r "all skills bound their own scope"
 
+echo "== Case E: ungate-queue stays narrow, and the gated tiers agree across skills =="
+# The whole point of v0.3.0 is that this pass removes a gate and STOPS. These greps
+# fail if a future edit quietly restores "act immediately" behaviour, or if the tier
+# vocabulary drifts apart between the pass that writes it and the triage that reads it.
+UQ="$SKILLS/ungate-queue/SKILL.md"
+TR="$SKILLS/triage-for-autonomy/SKILL.md"
+
+r=0; grep -qiE 'record and return|removing the gate is the whole job|STOPS there' "$UQ" || r=1
+check $r "ungate-queue states the record-and-return boundary"
+
+r=0; grep -qiE 'first gate is yours|Only the FIRST gate' "$UQ" || r=1
+check $r "ungate-queue limits itself to the first gate"
+
+# An earlier revision told this skill to do the work in the same sitting. That
+# instruction is the regression this case exists to catch.
+stray="$(grep -niE 'convert answers into progress in the same sitting|either do it now' "$UQ")"
+r=0; [ -z "$stray" ] || r=1; check $r "ungate-queue no longer tells you to do the work"
+[ -n "$stray" ] && indent <<<"$stray"
+
+# Tier vocabulary must exist in BOTH files, or one side writes markers the other cannot read.
+missing=""
+for tier in G1 G2 G3 G4 ENV; do
+  grep -q "$tier" "$UQ" || missing="$missing ungate-queue:$tier"
+  grep -q "$tier" "$TR" || missing="$missing triage:$tier"
+done
+r=0; [ -z "$missing" ] || r=1; check $r "ungate tiers G1-G4 and ENV appear in both skills"
+[ -n "$missing" ] && echo "      missing:$missing"
+
+r=0; grep -qiE 'not equally gated|cheapest first|cheapest-to-release' "$TR" || r=1
+check $r "triage ranks the gated pile rather than treating it as flat"
+
+r=0; grep -qiE 'read the stored tier|read it and move on|Re-judge only when' "$TR" || r=1
+check $r "triage reads a persisted tier instead of re-deriving it"
+
+# The tier must ride in the queue's EXISTING gate-reason field: a second store of
+# gate state is the failure mode this wording guards against.
+r=0; grep -qiE 'field the queue already has|gate reason the queue already stores' "$UQ" "$TR" || r=1
+check $r "the tier is stored in the existing gate-reason field, not a parallel record"
+
 echo; echo "PASS=$pass FAIL=$fail"
 [ "$fail" -eq 0 ]

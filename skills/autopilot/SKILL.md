@@ -36,6 +36,8 @@ If a persistent open-items store exists, that is the queue. If a local-execution
 
 If the user is available and wants to clear blockers rather than have work done unattended, that is `ungate-queue`, not this.
 
+That pass is deliberately narrow: it removes gates and records the answers, and does **not** do the work it releases. So expect it to hand back a set of newly-actionable items rather than finished ones — and expect the next run of this checklist to be where they actually get done. If a queue has just been ungated, re-triage before executing: the released items belong in the ranking with everything else.
+
 ## When NOT to use this
 
 Use `triage-for-autonomy`, `execute-unattended`, or `close-out-the-run` directly if you are already in a specific phase.
