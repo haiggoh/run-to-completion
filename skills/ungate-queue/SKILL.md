@@ -33,6 +33,13 @@ Gated is not one flat bucket. Items differ enormously in what an answer buys, so
 - **G4 — not an ungating candidate at all.** The gate is constant multi-step user interaction *while the task runs*. There is no answer that releases it into autonomy; the task simply has to be done attended. Keep these at the back and raise them only if the user explicitly asks. Naming one as attended work is a complete result.
 - **ENV — a recurring precondition, not a failure.** An external condition that will be true sometimes and false at other times: an application must be running, a particular network must be joined, a device must be plugged in. These can never be *permanently* removed and must not be reasoned about as though they could be. Mark them once as recurring, and thereafter the only question is "is the condition true right now?" — never "how do we solve this?".
 
+- **WAIT — not yours to answer, so not part of this pass.** Blocked on another item in this same queue reaching a milestone. Asking the user about it is worse than useless: it implies they owe something when the release is automatic. **Skip these entirely**, and if the queue does not distinguish them, spend the pass separating them out — that alone can halve the pile. The one exception is the next point.
+- **EXT — only if it has been earned.** Blocked on an external party. Before accepting the marker, require the recorded note of what *we* control and why each option fails (re-test it, stop depending on the broken part, local workaround, fork or patch, file a PR, file a bug report). If that note is missing, the right question is not about the third party at all — it is "shall I spend twenty minutes checking whether this is still true?", because unearned EXT is where items go to die.
+
+## A bankable question can hide inside a WAIT — ask that one
+
+WAIT items are skipped as a class, with one exception worth hunting for: an item that genuinely cannot *finish* until its target lands may still hold a decision that is answerable today. Banking that answer early is real progress, and it costs one question now instead of blocking the whole item later. Ask it, record the answer on the item, and leave the item in its waiting state — the answer does not release it, and pretending otherwise would misreport the queue.
+
 ## G5 — already released, with a gate expected later
 
 A distinct state worth naming: **not gated now**, but a known gate is expected before an unattended run could finish it.
@@ -51,6 +58,8 @@ G2: needs the bundled setup command run once
 G3: needs a custom launcher built and tested
 G4: needs you driving a GUI throughout
 ENV: needs that application running (recurring, not solvable)
+WAIT: needs <item-id> @ <milestone> — releases itself, do not ask
+EXT: external, EARNED — retested <date>, PR filed, no local workaround
 ```
 
 This is deliberately **plain text inside the field the queue already has**. It adds no field to anyone's store, it survives the queue changing underneath you, and any view that prints a gate reason shows the tier for free. Do not build a second record of gate state somewhere else; two records of the same thing will disagree.
@@ -67,6 +76,8 @@ For each item, work out the single smallest question whose answer releases it, a
 - **Needs a download or external fetch:** Confirm it is wanted. State its cost or size.
 - **Needs a fresh session state:** Say what state is in the way and what the clean start buys.
 - **Recurring precondition:** Ask only whether the condition holds now, and mark it ENV so it is never re-litigated.
+- **Waiting on another queue item:** Ask nothing. Retier it out of the gated pile, record the target and its milestone, and move on — this is bookkeeping, not a question.
+- **Waiting on an external party:** Ask nothing about the third party until the "options we control" note exists. If it does not, the item is not actually ready to be a gate.
 
 ## Batch by cheapness
 

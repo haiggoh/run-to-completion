@@ -38,6 +38,14 @@ Sort gated items into these, cheapest first:
 - **G3** — the gate needs a custom installation: real work, tried and tested.
 - **G4** — no answer releases it; it needs a human interacting throughout, so it is attended work, not an ungating candidate.
 - **ENV** — a recurring external precondition (an application running, a network joined, a device attached). Never permanently removable, so never re-reasoned as if it were.
+- **WAIT** — blocked on **another item in this same queue** reaching a milestone. Not a question for anyone: it releases itself when its target lands. Record the target *and the milestone* — "when that item is done" is frequently not the trigger, because what you are waiting for is often a specific point partway through. If the tracker has a dedicated state for this, use it rather than prose in a gate reason: a target it can re-check is a mechanism, whereas the same fact in prose is a note nobody re-reads.
+- **EXT** — blocked on an external party (a vendor, an upstream project, an unreleased version). **This marker must be EARNED.** "Blocked on a third party" is a conclusion, not an observation, and it decays: attach a recorded note of the options *we* control and why each fails — re-test the blocker, stop depending on the broken part, work around it locally, fork or patch, file a PR, file a bug report. Filing is an active step, not waiting. Without that note EXT is where items go to die: a single stale line from months ago keeps an item parked long after the real fix became ours.
+
+### Two distinctions that remove items from the gated pile for free
+
+**Scheduled is not blocked.** An item waiting only for a *date* to come round is not gated: when the date arrives the work is fully autonomous and nobody is needed. Model it as ordinary work with a future surface date, not as a gate. This needs no new mechanism and it shrinks the pile the user thinks they owe answers on.
+
+**Split ENV detection by check cost.** A recurring precondition readable from local state — a process running, an uptime, a log line, a file present — costs nothing to check, so it may be checked automatically every run. A precondition that needs an **outbound network call** (has an upstream release landed?) must never be automatic or per-run: that is real spend for an almost-always-negative answer. Put those on a slow calendar cadence instead. Concretely: do not build a release-poller.
 
 An item that is **not gated now but expects a gate later** is not in this list at all. Score it as an ordinary do-now or heavy item and note where it will stop. Real work that can proceed before the later gate is real work; withholding it keeps available items out of every run.
 
@@ -49,7 +57,17 @@ Judgment is unavoidable for a newly-triaged or newly-changed item. Spend it ther
 
 ## Tier dominates, priority breaks ties
 
-Ordering across tiers is settled by tier: do-now before heavy, and within gated, G1 before G2 before G3 before G4. An item's ordinary priority still matters, but only **within** a tier. A high-priority G3 does not jump ahead of a G1 — the whole point of the sort is that the cheap release comes first regardless of how much the expensive one matters.
+Ordering across tiers is settled by tier: do-now before heavy, and within gated, G1 before G2 before G3 before G4. WAIT items sort with neither group — see below. An item's ordinary priority still matters, but only **within** a tier. A high-priority G3 does not jump ahead of a G1 — the whole point of the sort is that the cheap release comes first regardless of how much the expensive one matters.
+
+## A self-releasing block is its own category, not a gate
+
+Keep WAIT items **separate from both** the actionable pile and the human-gated pile, and say so in the verdict. They cannot be started now, so they are not actionable; but nobody is needed, so filing them with the questions tells the user they owe answers they do not owe. On a real queue this was not a small effect: 15 of 26 blocked items turned out to be waiting on other queue items, so separating them cut the apparent question-pile by more than half.
+
+They also want re-polling every batch rather than once at triage, because each completed item may release one. That is the execution phase's job, but the *verdict* has to mark them for it.
+
+## A bankable question can hide inside a WAIT
+
+An item can be genuinely WAIT overall — it cannot finish until its target lands — while still holding a question that is answerable **right now**, and banking that answer early is real progress. Mark those explicitly. Without this sub-case the primary marker hides the question, which is the same defect as burying a one-answer gate underneath an attended-work one.
 
 ## Reading the queue
 
@@ -70,7 +88,10 @@ Set priority on only the top few Tier 1 picks. Strategic, not bulk. Re-ranking e
 | Install the bundled toolchain | Gated | G2: existing setup command, run once |
 | Build a custom launcher | Gated | G3: needs approaches tried and tested |
 | Re-do the layout by eye | Gated | G4: needs you steering throughout — attended work |
-| Re-test on the office network | Gated | ENV: that network must be joined (recurring) |
+| Re-test on the office network | Gated | ENV: that network must be joined (recurring, local check) |
+| Ship the migration | Waiting | WAIT: needs "publish the release" @ installed and verified |
+| Adopt the upstream fix | Gated | EXT: **earned** — re-tested on latest, still broken; PR filed; no local workaround without forking |
+| Quarterly key rotation | Do-now | Not gated: scheduled. Future surface date, fully autonomous on arrival |
 | Close issue #42 | Tier 1 | None |
 
 The tier lives as a short marker at the front of the gate reason the queue already stores. That keeps one record of gate state rather than two, and any view that prints a gate reason shows the tier for free.

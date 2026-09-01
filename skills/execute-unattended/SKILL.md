@@ -9,11 +9,33 @@ This is the execution engine. Your goal is momentum: do not stop between items, 
 
 ## Wrap-and-switch
 
-The moment an item turns out to need user input, stop that item immediately. Record the gate reason. Move to the next Tier 1 item. Do not wait and do not idle: an unattended run has nobody to answer, so a question asked mid-run buys nothing and costs the rest of the queue. Carry the question to the closing wrap instead, where it becomes a gated-list entry the user can answer in one pass.
+The moment an item turns out to need user input, stop that item immediately. Move to the next Tier 1 item. Do not wait and do not idle: an unattended run has nobody to answer, so a question asked mid-run buys nothing and costs the rest of the queue. Carry the question to the closing wrap instead, where it becomes a gated-list entry the user can answer in one pass.
+
+When you stop, do three things, not one:
+
+1. **Retier the item in the store**, not just in your notes. A gate you only mention in the wrap is gone as soon as the wrap scrolls past; the store is what the next run reads. If the tracker has a blocked state, set it.
+2. **Record the gate reason** — the specific question, not "needs input".
+3. **Name the partial progress in that reason.** State what is already done and what the next run should therefore *not* redo. Without this the next run cannot tell a fresh item from a half-finished one, so it starts over — and the first half is paid for twice.
+
+## Work up to a known gate on purpose
+
+Wrap-and-switch above is *reactive*: it fires when an item turns out to need a human. Make it **anticipatory** too. When you can already see that an item ends at a gate, do not skip the item — deliberately do the part that sits **before** the gate, then stop there and record it.
+
+This is the standard move, not an exception squeezed under granularity. Most gated items are not gated end to end; they are a stretch of ordinary work followed by one question. Skipping the whole item because it *finishes* at a question leaves real, autonomous progress on the table, and it is progress nobody else is going to make while the user is away.
+
+The corollary is worth stating plainly: **a known question is a gate, and actionable work sitting before that question is actionable.** Judge an item by where its first blocker is, not by whether it has one.
 
 ## Strategic granularity
 
 Split an item into finer sub-tasks only where splitting avoids a stall on something a human must answer. Splitting everything is overhead. Keep tasks atomic enough to verify, but coarse enough to move fast.
+
+## Re-poll the self-releasing blocks after each item
+
+Some blocked items are not waiting on a *person* at all — they are waiting on **another item in the queue** reaching a milestone. Those release themselves, for free, the moment their target lands. So every time you finish an item, check whether finishing it unblocked anything, and pull whatever it released into the pile.
+
+This costs one lookup per completed item and it is the difference between clearing a chain and clearing one link. If the tracker distinguishes this state (a `waiting` tier with a recorded target, rather than prose in a gate reason) the check is mechanical; if it does not, the dependency is buried in text and you will miss the cascade.
+
+Do **not** treat these as questions for the closing wrap. Nothing is owed by the user, so listing them among the things awaiting an answer inflates the pile they think they have to work through.
 
 ## Adapt empirically
 
@@ -51,6 +73,8 @@ As the resource you are spending gets scarce, prefer clean self-contained steps 
 ## Delegation
 
 Decide per step whether a cheaper delegate does it, and decide it up front rather than mid-grind — an intention to offload later reliably becomes "did it all myself". Default delegatable work to the delegate; keep a step for yourself when it needs judgement the delegate lacks, or when briefing and checking it would cost more than doing it. Verify whatever comes back against your usual verification discipline before building on it.
+
+**Decide before you read the inputs, and watch the distribution.** If you open the material to judge whether delegating is worth it, the expensive part is already spent and delegating afterwards is theatre — so "I have already read it" means the decision came too late, not that you should keep it. And note that "needs my judgement" and "not worth the overhead" between them can excuse *every* step: each call looks fine alone, so the tell is the aggregate. If a run delegates **nothing**, that is the thing to justify, once, explicitly — not a per-step shrug.
 
 ## What autonomy does not relax
 
