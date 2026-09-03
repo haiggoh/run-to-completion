@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.0
+
+**Blocks are not all one thing, and gating now anticipates instead of only reacting.**
+Completes the `run-to-completion` half of a design pass agreed with the user; the
+`waypoints` half shipped separately as that plugin's `0.6.0`. Written so a stranger's
+queue benefits without needing that specific tracker.
+
+- **Four kinds of block, distinguished by what RELEASES them**, because each needs a
+  different mechanism and a different owner: a **person** (`G1`–`G4`, released by
+  asking); a **queue item** (`WAIT`, new); a **recurring world condition** (`ENV`);
+  and an **external party** (`EXT`, new).
+- `WAIT` items are kept out of the human-gated pile entirely. Nobody is needed — they
+  release themselves — so filing them with the questions tells the user they owe
+  answers they do not owe. On a real queue **15 of 26** blocked items were this,
+  cutting the apparent question-pile by more than half. Record the **milestone**, not
+  just the target: "when that item is done" is frequently not the trigger.
+- `ENV` is now **split by check cost**. A precondition readable from local state may
+  be checked every run; one needing an outbound network call must never be, because
+  that is real spend for an almost-always-negative answer. Stated explicitly: do not
+  build a release-poller.
+- `EXT` **must be earned.** "Blocked on a third party" is a conclusion rather than an
+  observation, and it decays — so the marker now requires a recorded note of the
+  options we control and why each fails. Unearned, `EXT` is where items go to die.
+- Two distinctions that shrink the gated pile for free: **scheduled is not blocked**
+  (a date is not a gate — model it as a future surface date), and **a bankable
+  question can hide inside a `WAIT`** (ask that one, record it, leave the item
+  waiting).
+- **Anticipatory gating:** when an item can already be seen to end at a gate, do the
+  part before the gate on purpose and stop there. Most gated items are ordinary work
+  followed by one question, so skipping the whole item forfeits autonomous progress
+  nobody else will make. This is now the standard move, not an exception.
+- Items are **retiered in the store**, not merely annotated with a gate reason.
+
 ## 0.3.0
 
 **`ungate-queue` is now gate-removal only.** It had drifted into doing the work it
