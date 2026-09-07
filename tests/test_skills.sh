@@ -132,5 +132,42 @@ check $r "triage reads a persisted tier instead of re-deriving it"
 r=0; grep -qiE 'field the queue already has|gate reason the queue already stores' "$UQ" "$TR" || r=1
 check $r "the tier is stored in the existing gate-reason field, not a parallel record"
 
+echo "== Case D: the ship loop runs past the push =="
+# A change that is committed and pushed is not shipped: there is no immutable reference to what
+# went out, and nothing has yet demonstrated the new behaviour actually runs. These assertions pin
+# the three steps that live BEYOND the push, because "pushed, therefore done" is the specific
+# failure this skill exists to prevent and the easiest one to quietly re-introduce by trimming.
+EU="$SKILLS/execute-unattended/SKILL.md"
+r=0; grep -qiE '^5\..*[Tt]ag the version|\*\*Tag the version' "$EU" || r=1
+check $r "the ship loop has a tag step"
+r=0; grep -qiE 'Cut a release' "$EU" || r=1
+check $r "the ship loop has a release step"
+r=0; grep -qiE '\bDogfood' "$EU" || r=1
+check $r "the ship loop has a dogfood step"
+
+# Dogfooding is only meaningful if it is distinguished from the version check that precedes it --
+# otherwise a reader satisfies it by re-reading the version they just wrote.
+r=0; grep -qiE 'version string.*(proves|evidence)|live and inert|live-and-inert' "$EU" || r=1
+check $r "says a correct version string is not evidence the feature works"
+
+# "When appropriate" must carry a criterion, or it collapses into always/never at the reader's whim.
+r=0; grep -qiE 'appropriate.*(real judgement|not a euphemism)|how a consumer' "$EU" || r=1
+check $r "gives a criterion for when a release is appropriate"
+
+# Tag and release are PUBLIC actions, so the standing confirmation rule has to reach them. A bare
+# "you may push" must not be readable as clearance for everything downstream of the push.
+r=0; grep -qiE 'ship.loop depth|named depth|through push, through tag' "$EU" || r=1
+check $r "ship-loop authorization is asked as a depth, not a bare push yes"
+r=0; grep -qiE 'depth' "$SKILLS/autopilot/SKILL.md" || r=1
+check $r "autopilot kickoff asks for the ship-loop depth"
+r=0; grep -qiE 'depth' "$SKILLS/run-to-completion/SKILL.md" || r=1
+check $r "the attended up-front pass asks for the ship-loop depth"
+
+# Stopping early is a legitimate outcome, but only if it is REPORTED as early rather than as done.
+r=0; grep -qiE 'gate on that item|record the rest as a gate' "$EU" || r=1
+check $r "an unavailable tag/release is a recorded gate, not a redefined done"
+r=0; grep -qiE 'whole.*ship loop|name the step' "$SKILLS/close-out-the-run/SKILL.md" || r=1
+check $r "close-out verifies the ship loop ran to its end"
+
 echo; echo "PASS=$pass FAIL=$fail"
 [ "$fail" -eq 0 ]

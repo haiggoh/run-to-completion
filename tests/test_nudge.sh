@@ -32,5 +32,17 @@ r=0; [ -z "$(find "$HOMEB" -type f 2>/dev/null)" ] || r=1; check $r "writes no s
 echo "== Case C: hookEventName is SessionStart =="
 [ "$(jq -r '.hookSpecificOutput.hookEventName' "$OUT")" = "SessionStart" ]; check $? "hookEventName correct"
 
+echo "== Case D: the nudge carries the ship loop's tail, not just its middle =="
+# The always-loaded surface is what a session actually reads, so a nudge that says "push" and stops
+# re-teaches the exact habit the skill was extended to break. These pin the three steps past the
+# push plus the reason dogfooding is not redundant with the version check before it.
+case "$(ctx "$OUT")" in *"TAG it"*) r=0;; *) r=1;; esac; check $r "nudge names tagging"
+case "$(ctx "$OUT")" in *"cut a RELEASE"*) r=0;; *) r=1;; esac; check $r "nudge names cutting a release"
+case "$(ctx "$OUT")" in *"DOGFOOD"*) r=0;; *) r=1;; esac; check $r "nudge names dogfooding"
+case "$(ctx "$OUT")" in *"version string"*) r=0;; *) r=1;; esac; check $r "nudge says a version string is not proof the feature works"
+case "$(ctx "$OUT")" in *"DEPTH"*) r=0;; *) r=1;; esac; check $r "nudge asks ship-loop authorization as a depth"
+# A release is conditional on purpose; an unconditional "always release" would be wrong.
+case "$(ctx "$OUT")" in *"when that is how a consumer"*) r=0;; *) r=1;; esac; check $r "nudge keeps the release step conditional"
+
 echo; echo "PASS=$pass FAIL=$fail"
 [ "$fail" -eq 0 ]

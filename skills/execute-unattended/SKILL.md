@@ -54,13 +54,22 @@ Apply this rule before touching any file:
 For any change to a repository or published artifact, follow this ordered list:
 
 1. Verify the change does what it claims.
-2. Bump the artifact’s version.
+2. Bump the artifact’s version — in **every** place that states it, not just the manifest (changelog entry, docs, any embedded string). A version that disagrees with itself is worse than one that was never bumped.
 3. Commit.
 4. Push.
-5. Reinstall or otherwise refresh the consumed copy.
-6. Confirm the change is live **in the installed copy, not just in the source tree**.
+5. **Tag the version.** An annotated tag on the release commit, matching the version you just bumped.
+6. **Cut a release, when appropriate.**
+7. Reinstall or otherwise refresh the consumed copy.
+8. Confirm the change is live **in the installed copy, not just in the source tree**.
+9. **Dogfood it:** exercise the new behaviour through the installed copy, against real state.
 
-The last step matters because source and installed copies drift. A change that is only in source has not shipped.
+Steps 8 and 9 are not the same check, and stopping at 8 is the usual mistake. Step 8 asks *did the new code arrive*; step 9 asks *does it do the thing*. A correct version string is evidence of a successful copy and nothing more — the change can be live and inert, or live and wrong, and both look identical from the version number. Take the specific behaviour the change claims and run it: if you added a command, run that command; if you changed a pass, perform the pass. Failing to fire is a result worth having, and finding it now is the entire point of doing it before you stop.
+
+The earlier steps are what make that possible at all. A push without a tag leaves no immutable reference to what shipped, so the next person diffing a regression has a version number that points at a moving branch. And source-versus-installed drift is why step 7 exists: a change that is only in the source tree has not shipped.
+
+**"When appropriate" is a real judgement, not a euphemism for always.** A release is appropriate when it is how a consumer *learns about or obtains* the change: the artifact is installed or updated from the release surface, or the change is user-facing enough that its notes are the changelog people will actually read. It is not appropriate for a change no consumer resolves through that surface — an internal refactor, a fixture, a typo. Tagging is different: tag every version bump, because a tag is cheap, immutable and answers a question a release cannot.
+
+If you find you cannot tag or release — no permission, no remote, no such surface — that is a gate on that item, recorded like any other. Do not quietly redefine the item as done at step 4.
 
 ## Milestone wraps
 
@@ -79,6 +88,8 @@ Decide per step whether a cheaper delegate does it, and decide it up front rathe
 ## What autonomy does not relax
 
 Destructive or hard-to-reverse actions still need explicit confirmation. This includes deleting data, force-pushing, publishing to a shared or public destination, or changing shared infrastructure. Get that authorization in the up-front question pass so the loop does not stall on it late.
+
+**The ship loop makes this sharper, not looser.** Its later steps *are* public actions: a pushed tag and a cut release are both visible and awkward to retract, and a release notifies and indexes. So authorize the ship loop **to a named depth** in the up-front pass — through push, through tag, or through release — rather than treating "you may push" as covering everything downstream of it. Publishing more than you were permitted is not a small overreach just because the code was correct. Where the depth stops, the loop stops with it: do the steps you are cleared for, record the rest as a gate, and say which step you stopped at.
 
 If you reach such an action without having asked, the absence of anyone to answer is **not** permission. Treat it as a gate like any other: record it, leave the destructive step undone, and move on. An unattended run may not upgrade its own authority just because asking is inconvenient — that is the one place where "keep moving" yields.
 

@@ -13,7 +13,7 @@ Do this once before triage:
 
 1. **Establish the resource picture.** Find out what you actually have to spend — time, a request or token quota, a cost cap if one exists at all — by checking, not by assuming. Many setups have no cap, and in those the answer is simply "no limit to plan around". Never conclude you are blocked without looking: if the user's prompts are being answered, the pipe is working.
 2. **Warm any delegate.** Start any local-execution capability in the background so the first delegation is not a cold start. Capture whatever address or port the warm-up reports.
-3. **Ask blocking questions about THE RUN — and only about the run.** Scope, and permission for any push, publish, or confirmation-gated action. Do not stop for those again.
+3. **Ask blocking questions about THE RUN — and only about the run.** Scope, and permission for any push, publish, or confirmation-gated action. Ask for the **ship-loop depth** as one question — cleared through push, through tag, or through release — rather than a bare yes to “may you push”, because the loop's later steps publish and a run with nobody present cannot widen its own permission when it reaches one. Do not stop for those again.
 
    **The asymmetry that makes this work:** kickoff questions are about the *run*; a question about a *specific item* discovered during triage becomes a **gate on that item**, never a kickoff question. Otherwise kickoff degenerates into interrogating sixty items one by one, which defeats the entire point of "clear what you can while I am away" — the user walks away precisely so they do not have to answer things.
 

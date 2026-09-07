@@ -21,7 +21,7 @@ Attempting gated work unsupervised is the single worst way to end a run. It prod
 
 Before stopping, check every item the run touched:
 - Every item carries an accurate done state and a resolution title that says what actually happened.
-- Repositories are committed and pushed.
+- Repositories are committed and pushed, and anything the run shipped went through the **whole** ship loop in `execute-unattended` — tagged, released where that was appropriate, and dogfooded — rather than being called done at the push. “The tests passed” is weaker than having run the new behaviour once for real, so if the run stopped early at a step, name the step.
 - Plans and notes agree with reality.
 - Nothing is left orphaned or still flagged as pending when it is finished.
 

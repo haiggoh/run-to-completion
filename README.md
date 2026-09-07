@@ -14,7 +14,7 @@ close out with an honest account of what was left and why.
 |---|---|---|
 | `autopilot` | whole run | Entry point for "run everything you can while I'm away." Sequences the three phases below as an explicit checklist, plus the up-front kickoff. |
 | `triage-for-autonomy` | before | Scores any queue — a to-do list, an issue tracker, plan steps, a persistent open-items store — into **do-now** / **autonomous-but-heavy** / **gated**, recording a gate reason per blocked item, and ranking the gated pile by how cheaply each one could be released. |
-| `execute-unattended` | during | Keeping moving: wrap-and-switch the instant something needs a human, reversibility before touching a file, and the ship loop that carries a change through to confirmed-live in the *installed* copy. |
+| `execute-unattended` | during | Keeping moving: wrap-and-switch the instant something needs a human, reversibility before touching a file, and the ship loop that carries a change all the way out — verified, version-bumped, committed, pushed, **tagged**, **released** where that is how a consumer obtains it, refreshed in the *installed* copy, and then **dogfooded** there against real state. |
 | `close-out-the-run` | after | Reconcile the durable records the run touched, stop cleanly at the gated boundary instead of churning, and write a wrap whose gated list says why each remaining item was left and how to resume it. |
 | `ungate-queue` | attended | The other half: walks the **blocked** pile *with* you, cheapest gate first, turning each gate reason into the one question that releases it — then **records the answer and stops**. It removes gates; it does not do the work it releases. |
 | `run-to-completion` | offer | The original rule, for a plan already in view in the conversation: offer continuous execution, ask blocking matter-of-taste questions up front, fold mid-run prompts in at task seams. |
@@ -74,6 +74,14 @@ changing shared infrastructure. Those confirmations apply at full strength insid
 an unattended run, unless you authorized that specific action's scope up front.
 `autopilot` deliberately asks for that scope during kickoff so the loop doesn't
 stall on it late.
+
+The ship loop makes this sharper rather than looser, because its own later steps
+publish: a pushed tag and a cut release are both visible and awkward to retract.
+So the scope is asked as a **depth** — cleared through push, through tag, or
+through release — instead of a bare yes to "may you push", which settles nothing
+about what comes after it. Where the depth stops, the loop stops with it: the
+remaining steps are recorded as a gate, and the run says which step it stopped at
+rather than calling the item done.
 
 ## Independence
 

@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.5.0
+
+**Pushed is not shipped.** The ship loop used to end at "confirmed live in the installed
+copy", which turns out to stop one step short of the thing that matters and two steps
+short of leaving a usable record. It now runs: verify → bump → commit → push → **tag** →
+**release, when appropriate** → refresh the installed copy → confirm it is live there →
+**dogfood it**.
+
+- **Tag every version bump.** A push without a tag leaves no immutable reference to what
+  went out, so whoever bisects the next regression has a version number pointing at a
+  moving branch. Tags are cheap, so this one is unconditional.
+- **Cut a release when appropriate — and "appropriate" now carries a criterion**, because
+  without one the phrase collapses into always-or-never at the reader's whim. A release is
+  appropriate when it is how a consumer *learns about or obtains* the change: the artifact
+  updates from the release surface, or the change is user-facing enough that its notes are
+  the changelog anyone actually reads. Not for an internal refactor, a fixture, or a typo.
+- **Dogfood the change through the installed copy, against real state.** This is a separate
+  check from the one before it, and conflating them is the usual miss: confirming the
+  version asks *did the new code arrive*, dogfooding asks *does it do the thing*. A change
+  can be live and inert, or live and wrong, and both are indistinguishable from a correct
+  version string. If you added a command, run it; if you changed a pass, perform the pass.
+- **Bump the version in every place that states it**, not just the manifest — a version
+  that disagrees with itself is worse than one that was never bumped.
+
+### Authorization got narrower, not wider
+The new steps *are* public actions: a pushed tag and a cut release are both visible and
+awkward to retract, and a release notifies and indexes. So the standing confirm-before-
+publishing rule now reaches them explicitly, and the up-front pass asks for the ship loop
+as a **depth** — through push, through tag, or through release — rather than treating "you
+may push" as clearance for everything downstream of the push. Both entry points ask it
+that way: `autopilot` at kickoff (where nobody is present to widen it later) and
+`run-to-completion` in the attended up-front pass. Where the depth stops, the loop stops:
+the remaining steps become a recorded gate. Being unable to tag or release is a gate like
+any other and never a reason to redefine the item as done at the push.
+
+### Also
+- `close-out-the-run` now verifies the ship loop reached its end, and asks a run that
+  stopped early to name the step it stopped at. It *references* the loop rather than
+  restating it — the existing test that keeps the procedure owned by exactly one skill
+  still passes, and caught the first attempt at this edit.
+- 16 new assertions across `tests/test_skills.sh` (Case D) and `tests/test_nudge.sh`
+  (Case D), covering all three new steps, the release criterion, the depth rule, and the
+  gate-not-done fallback. Mutation-tested 10/10.
+
 ## 0.4.0
 
 **Blocks are not all one thing, and gating now anticipates instead of only reacting.**
