@@ -81,7 +81,9 @@ As the resource you are spending gets scarce, prefer clean self-contained steps 
 
 ## Delegation
 
-Decide per step whether a cheaper delegate does it, and decide it up front rather than mid-grind — an intention to offload later reliably becomes "did it all myself". Default delegatable work to the delegate; keep a step for yourself when it needs judgement the delegate lacks, or when briefing and checking it would cost more than doing it. Verify whatever comes back against your usual verification discipline before building on it.
+Decide per step whether a cheaper delegate does it, and decide it up front rather than mid-grind — an intention to offload later reliably becomes "did it all myself". Default delegatable work to a delegate lane; keep a step for yourself when it needs judgement no delegate has, or when briefing and checking it would cost more than doing it. Verify whatever comes back against your usual verification discipline before building on it.
+
+**A delegate is not one thing.** Local inference and free/cheap remote APIs are separate lanes with separate constraints (local: hardware-bound, private, works offline; remote: usually faster, needs network, provider-specific limits). Route each step to whichever lane fits it, and when several independent items are ready at once and both lanes have spare capacity, run them in parallel across lanes rather than serializing through one.
 
 **Decide before you read the inputs, and watch the distribution.** If you open the material to judge whether delegating is worth it, the expensive part is already spent and delegating afterwards is theatre — so "I have already read it" means the decision came too late, not that you should keep it. And note that "needs my judgement" and "not worth the overhead" between them can excuse *every* step: each call looks fine alone, so the tell is the aggregate. If a run delegates **nothing**, that is the thing to justify, once, explicitly — not a per-step shrug.
 

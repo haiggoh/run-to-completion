@@ -87,9 +87,11 @@ rather than calling the item done.
 
 Every skill is written in capability terms and names no other plugin. If you have
 a persistent open-items store, that's the queue; if you have a local-execution
-capability, delegatable steps route to it; if you have a reconciliation
-discipline, the closing phase uses it. None of them are required — the skills
-work on whatever queue you already keep, including one they didn't create.
+capability or a free/cheap remote-API lane (or both), delegatable steps route to
+whichever fits, including split across both in parallel when independent items
+are ready together; if you have a reconciliation discipline, the closing phase
+uses it. None of them are required — the skills work on whatever queue you
+already keep, including one they didn't create.
 
 ## Why
 

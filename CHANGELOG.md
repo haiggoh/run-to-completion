@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1
+
+**A delegate is not one thing.** The skills spoke of "a local-execution capability" as
+if local inference were the only delegate lane. It isn't: free or cheap remote APIs are
+an equally valid lane, and a run can route to either — or split independent work across
+both in parallel when both have spare capacity. `autopilot`, `execute-unattended`, and
+the README now say so.
+
 ## 0.5.0
 
 **Pushed is not shipped.** The ship loop used to end at "confirmed live in the installed
