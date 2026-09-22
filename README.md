@@ -90,11 +90,21 @@ The fix is not to merge earlier. Merging *in order to test* makes the default
 branch the place unverified work lands, and the pressure to merge fast is exactly
 when verification gets skipped. Instead the loop dogfoods twice: **pre-merge**
 from the working branch, wherever the delivery mechanism can consume a local
-checkout in place (a local source, a path-based install, a link mode, an editable
+checkout (a local source, a path-based install, a link mode, an editable
 install) — which answers *does the behaviour work*; and **post-distribution**
 through the real fetch and install path — which answers the different question
 *does it work the way a consumer receives it*. Packaging-only failures surface
 nowhere but the second.
+
+Find out whether the pre-merge route **links** your checkout or **copies** it
+before trusting it, because a copy is the case that wastes an afternoon: the
+refresh command is often version-gated, so it reports "already up to date", exits
+0, and copies nothing, leaving you testing the old behaviour while every command
+succeeds. Verify with an observable change through the installed path, not with an
+exit code. And when that bites, do not edit the installed copy to move on — it is
+derived state that the next update overwrites silently, so the change can neither
+ship nor be trusted. Editing a derived copy to make a test pass means the loop is
+wrong, not the permissions.
 
 Where an installer can be pointed at a branch or commit, that is deliberately not
 the routine path: a pin written into a published catalog is mutable state where

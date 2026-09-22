@@ -20,11 +20,20 @@ is indistinguishable from a real one.
   action: it makes the change obtainable by every consumer. Clearing a run "through push"
   must not be readable as clearance to land it.
 - **New step 2: dogfood PRE-merge.** Many delivery mechanisms can consume a local checkout
-  in place — a local source, a path-based install, a link mode, an editable install. Where
-  one exists, that is the cheaper and more honest place to find a broken feature: edits are
-  live, no bump or push is needed, nothing published changes. Merging to test makes the
-  default branch where unverified work lands, and the pressure to merge fast is exactly
-  when verification gets skipped.
+  — a local source, a path-based install, a link mode, an editable install. Where one
+  exists, that is the cheaper and more honest place to find a broken feature: no bump or
+  push is needed and nothing published changes. Merging to test makes the default branch
+  where unverified work lands, and the pressure to merge fast is exactly when verification
+  gets skipped.
+- **But establish whether that route LINKS or COPIES the checkout first.** A copy is the
+  case that costs an afternoon: the edit stays in the source, the installed copy stays
+  stale, and the refresh is often version-gated so it reports "already up to date" and
+  exits 0 having copied nothing — every command succeeds while you test the old behaviour.
+  Verify with an observable change through the installed path, never with an exit code.
+- **And do not edit the installed copy when it bites.** It is derived state the next update
+  overwrites silently, so the change can neither ship nor be trusted while testing; a
+  sandbox may also refuse writes there, which looks like a permissions fault and invites
+  more workarounds. Editing a derived copy to make a test pass means the loop is wrong.
 - **The two dogfoods answer different questions** and neither replaces the other: pre-merge
   asks *does the behaviour work*, post-distribution asks *does it work the way a consumer
   receives it* — through the real fetch, install path and packaging. Packaging-only failures

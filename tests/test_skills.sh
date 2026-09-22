@@ -175,6 +175,16 @@ r=0; grep -qiE 'merging \*?in order to test\*? has (it|the loop) backwards|has t
 check $r "warns against merging in order to test"
 r=0; grep -qiE '[Dd]ogfood it pre-merge|[Pp]re-merge \(step' "$EU" || r=1
 check $r "the ship loop dogfoods pre-merge as well as post-distribution"
+# The copy-vs-link trap and the derived-copy prohibition. Measured failure mode: when a source
+# edit does not show up installed, the reflex is to edit the artifact cache directly -- which is
+# silently overwritten by the next update. The pre-merge advice is actively harmful without these.
+r=0; grep -qiE 'LINKS the checkout or COPIES it|links your checkout or copies' "$EU" || r=1
+check $r "pre-merge advice says to establish link-vs-copy first"
+r=0; grep -qiE 'already up to date' "$EU" || r=1
+check $r "names the version-gated refresh that exits 0 having copied nothing"
+r=0; grep -qiE 'edit the installed copy directly. Do not|derived state' "$EU" || r=1
+check $r "forbids editing the installed/derived copy"
+
 # The depth vocabulary is asked in three places and read in one. If merge is a depth in the loop
 # but not in the kickoff questions, a run gets cleared "through push" and stops short silently.
 r=0; grep -qiE 'through merge' "$EU" || r=1

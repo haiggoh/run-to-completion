@@ -48,6 +48,14 @@ case "$(ctx "$OUT")" in *"not yet obtainable"*) r=0;; *) r=1;; esac; check $r "n
 case "$(ctx "$OUT")" in *"DOGFOOD PRE-MERGE"*) r=0;; *) r=1;; esac; check $r "nudge names the pre-merge dogfood"
 case "$(ctx "$OUT")" in *"through MERGE"*) r=0;; *) r=1;; esac; check $r "nudge includes merge in the depth list"
 
+# The cache warning. This is the measured failure: agents reach for sed/bash inside the plugin
+# cache when a source edit does not appear installed, which cannot ship and is silently reverted.
+# It belongs in the ALWAYS-ON surface, because by the time someone opens a skill they have
+# usually already tried it.
+case "$(ctx "$OUT")" in *"NEVER edit the installed"*) r=0;; *) r=1;; esac; check $r "nudge forbids editing the installed/derived copy"
+case "$(ctx "$OUT")" in *"LINKS or COPIES"*) r=0;; *) r=1;; esac; check $r "nudge says to check whether the dev route links or copies"
+case "$(ctx "$OUT")" in *"already up to date"*) r=0;; *) r=1;; esac; check $r "nudge names the version-gated no-op refresh"
+
 # A release is conditional on purpose; an unconditional "always release" would be wrong.
 case "$(ctx "$OUT")" in *"when that is how a consumer"*) r=0;; *) r=1;; esac; check $r "nudge keeps the release step conditional"
 
