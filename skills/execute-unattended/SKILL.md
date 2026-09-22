@@ -54,18 +54,37 @@ Apply this rule before touching any file:
 For any change to a repository or published artifact, follow this ordered list:
 
 1. Verify the change does what it claims.
-2. Bump the artifact’s version — in **every** place that states it, not just the manifest (changelog entry, docs, any embedded string). A version that disagrees with itself is worse than one that was never bumped.
-3. Commit.
-4. Push.
-5. **Tag the version.** An annotated tag on the release commit, matching the version you just bumped.
-6. **Cut a release, when appropriate.**
-7. Reinstall or otherwise refresh the consumed copy.
-8. Confirm the change is live **in the installed copy, not just in the source tree**.
-9. **Dogfood it:** exercise the new behaviour through the installed copy, against real state.
+2. **Dogfood it pre-merge**, from the working branch, whenever the delivery mechanism offers a way to consume a local checkout in place. See *Where the dogfood step goes* below.
+3. Bump the artifact’s version — in **every** place that states it, not just the manifest (changelog entry, docs, any embedded string). A version that disagrees with itself is worse than one that was never bumped.
+4. Commit.
+5. Push the branch.
+6. **Land it on the branch consumers actually resolve.** Merge to the default branch — see *The default-branch step* below.
+7. **Tag the version.** An annotated tag on the release commit, matching the version you just bumped.
+8. **Cut a release, when appropriate.**
+9. Reinstall or otherwise refresh the consumed copy.
+10. Confirm the change is live **in the installed copy, not just in the source tree**.
+11. **Dogfood the distributed copy:** exercise the new behaviour through the installed artifact, against real state.
 
-Steps 8 and 9 are not the same check, and stopping at 8 is the usual mistake. Step 8 asks *did the new code arrive*; step 9 asks *does it do the thing*. A correct version string is evidence of a successful copy and nothing more — the change can be live and inert, or live and wrong, and both look identical from the version number. Take the specific behaviour the change claims and run it: if you added a command, run that command; if you changed a pass, perform the pass. Failing to fire is a result worth having, and finding it now is the entire point of doing it before you stop.
+Steps 10 and 11 are not the same check, and stopping at 10 is the usual mistake. Step 10 asks *did the new code arrive*; step 11 asks *does it do the thing*. A correct version string is evidence of a successful copy and nothing more — the change can be live and inert, or live and wrong, and both look identical from the version number. Take the specific behaviour the change claims and run it: if you added a command, run that command; if you changed a pass, perform the pass. Failing to fire is a result worth having, and finding it now is the entire point of doing it before you stop.
 
-The earlier steps are what make that possible at all. A push without a tag leaves no immutable reference to what shipped, so the next person diffing a regression has a version number that points at a moving branch. And source-versus-installed drift is why step 7 exists: a change that is only in the source tree has not shipped.
+The earlier steps are what make that possible at all. A push without a tag leaves no immutable reference to what shipped, so the next person diffing a regression has a version number that points at a moving branch. And source-versus-installed drift is why step 9 exists: a change that is only in the source tree has not shipped.
+
+### The default-branch step
+
+An installer or update command typically resolves an artifact from the repository's **default branch**, not from whatever branch you were working on. That is a deliberate property of a distribution tool, not a shortcoming: what it fetches is what a consumer gets. But it has a consequence the ship loop has to state, because it is invisible from inside the branch — **a pushed branch is not yet obtainable.** Steps 9 to 11 will happily refresh, confirm and exercise the *previous* version and report success, because that is genuinely what is published.
+
+So before you check anything downstream, establish which ref the consuming path resolves, and get the change onto it. Usually that means merging to the default branch. Do not read a green step 10 as evidence you skipped nothing: if the version string did not change, the most likely reason is that nothing was published, not that the refresh was a no-op.
+
+Where an installer *can* be pointed at a branch, tag or commit, prefer not to do it as a routine dev loop. A pin written into a published catalog is mutable state in a place consumers read, it keeps succeeding silently after the branch stops being interesting, and removing it depends on someone remembering. Pinning earns its keep for a deliberate, visible purpose with an obvious removal trigger — holding consumers at a known-good version after a bad release — not as a way to avoid merging.
+
+### Where the dogfood step goes
+
+Merging *in order to test* has the loop backwards: it makes the default branch the place where unverified work lands, and the pressure to merge fast is exactly when verification gets skipped. Dogfood twice instead, and know what each pass buys:
+
+- **Pre-merge (step 2)** answers *does the behaviour work*. Many delivery mechanisms can consume a local checkout directly — a local source, a path-based install, a link mode, a dev/editable install. Where one exists, use it: edits are live, no version bump or push is needed, and nothing published changes. This is the cheaper and more honest place to find a broken feature.
+- **Post-distribution (step 11)** answers a different question: *does it work the way a consumer receives it* — through the real fetch, the real install path, the real packaging. Only the published ref can prove that, and packaging-only failures show up nowhere else.
+
+If no pre-merge route exists, say so and rely on step 11 — but check for one before concluding it, because "I had to merge to try it" is usually a route that was never looked for.
 
 **"When appropriate" is a real judgement, not a euphemism for always.** A release is appropriate when it is how a consumer *learns about or obtains* the change: the artifact is installed or updated from the release surface, or the change is user-facing enough that its notes are the changelog people will actually read. It is not appropriate for a change no consumer resolves through that surface — an internal refactor, a fixture, a typo. Tagging is different: tag every version bump, because a tag is cheap, immutable and answers a question a release cannot.
 
@@ -91,7 +110,7 @@ Decide per step whether a cheaper delegate does it, and decide it up front rathe
 
 Destructive or hard-to-reverse actions still need explicit confirmation. This includes deleting data, force-pushing, publishing to a shared or public destination, or changing shared infrastructure. Get that authorization in the up-front question pass so the loop does not stall on it late.
 
-**The ship loop makes this sharper, not looser.** Its later steps *are* public actions: a pushed tag and a cut release are both visible and awkward to retract, and a release notifies and indexes. So authorize the ship loop **to a named depth** in the up-front pass — through push, through tag, or through release — rather than treating "you may push" as covering everything downstream of it. Publishing more than you were permitted is not a small overreach just because the code was correct. Where the depth stops, the loop stops with it: do the steps you are cleared for, record the rest as a gate, and say which step you stopped at.
+**The ship loop makes this sharper, not looser.** Its later steps *are* public actions: a merge to the default branch makes the change obtainable by every consumer, a pushed tag and a cut release are both visible and awkward to retract, and a release notifies and indexes. So authorize the ship loop **to a named depth** in the up-front pass — through push, through merge, through tag, or through release — rather than treating "you may push" as covering everything downstream of it. Push and merge are worth distinguishing precisely because the gap between them is where "shipped" is claimed too early: pushing a branch affects nobody, while landing it on the default branch is the step that ships. Publishing more than you were permitted is not a small overreach just because the code was correct. Where the depth stops, the loop stops with it: do the steps you are cleared for, record the rest as a gate, and say which step you stopped at.
 
 If you reach such an action without having asked, the absence of anyone to answer is **not** permission. Treat it as a gate like any other: record it, leave the destructive step undone, and move on. An unattended run may not upgrade its own authority just because asking is inconvenient — that is the one place where "keep moving" yields.
 

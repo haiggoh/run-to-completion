@@ -41,6 +41,13 @@ case "$(ctx "$OUT")" in *"cut a RELEASE"*) r=0;; *) r=1;; esac; check $r "nudge 
 case "$(ctx "$OUT")" in *"DOGFOOD"*) r=0;; *) r=1;; esac; check $r "nudge names dogfooding"
 case "$(ctx "$OUT")" in *"version string"*) r=0;; *) r=1;; esac; check $r "nudge says a version string is not proof the feature works"
 case "$(ctx "$OUT")" in *"DEPTH"*) r=0;; *) r=1;; esac; check $r "nudge asks ship-loop authorization as a depth"
+# The merge step: an installer resolves the DEFAULT branch, so the always-on nudge has to carry it
+# or a session reads "pushed" as shipped and the downstream checks verify the OLD version happily.
+case "$(ctx "$OUT")" in *"MERGE to"*) r=0;; *) r=1;; esac; check $r "nudge names merging to the consumed branch"
+case "$(ctx "$OUT")" in *"not yet obtainable"*) r=0;; *) r=1;; esac; check $r "nudge says a pushed branch is not yet obtainable"
+case "$(ctx "$OUT")" in *"DOGFOOD PRE-MERGE"*) r=0;; *) r=1;; esac; check $r "nudge names the pre-merge dogfood"
+case "$(ctx "$OUT")" in *"through MERGE"*) r=0;; *) r=1;; esac; check $r "nudge includes merge in the depth list"
+
 # A release is conditional on purpose; an unconditional "always release" would be wrong.
 case "$(ctx "$OUT")" in *"when that is how a consumer"*) r=0;; *) r=1;; esac; check $r "nudge keeps the release step conditional"
 

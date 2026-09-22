@@ -163,6 +163,30 @@ check $r "autopilot kickoff asks for the ship-loop depth"
 r=0; grep -qiE 'depth' "$SKILLS/run-to-completion/SKILL.md" || r=1
 check $r "the attended up-front pass asks for the ship-loop depth"
 
+# The merge step and the pre-merge dogfood are the 0.6.0 additions. An installer resolves the
+# DEFAULT branch, so a pushed-but-unmerged change is not obtainable while every downstream step
+# still reports success against the OLD version -- a green "confirmed live" that proves nothing.
+# These assertions exist because that failure is invisible from inside the branch.
+r=0; grep -qE '^6\. \*\*Land it on the branch consumers actually resolve' "$EU" || r=1
+check $r "the ship loop has a default-branch/merge step as step 6"
+r=0; grep -qiE 'pushed branch is not yet obtainable' "$EU" || r=1
+check $r "says a pushed branch is not yet obtainable"
+r=0; grep -qiE 'merging \*?in order to test\*? has (it|the loop) backwards|has the loop backwards' "$EU" || r=1
+check $r "warns against merging in order to test"
+r=0; grep -qiE '[Dd]ogfood it pre-merge|[Pp]re-merge \(step' "$EU" || r=1
+check $r "the ship loop dogfoods pre-merge as well as post-distribution"
+# The depth vocabulary is asked in three places and read in one. If merge is a depth in the loop
+# but not in the kickoff questions, a run gets cleared "through push" and stops short silently.
+r=0; grep -qiE 'through merge' "$EU" || r=1
+check $r "execute-unattended lists merge as a ship-loop depth"
+r=0; grep -qiE 'through merge|merge to the default branch' "$SKILLS/autopilot/SKILL.md" || r=1
+check $r "autopilot kickoff includes merge in the depth question"
+r=0; grep -qiE 'merge to the default branch' "$SKILLS/run-to-completion/SKILL.md" || r=1
+check $r "the attended up-front pass includes merge in the depth question"
+# Close-out must look for the specific shape: committed, pushed, and never landed.
+r=0; grep -qiE 'unmerged branch|branch consumers resolve' "$SKILLS/close-out-the-run/SKILL.md" || r=1
+check $r "close-out looks for work stranded on an unmerged branch"
+
 # Stopping early is a legitimate outcome, but only if it is REPORTED as early rather than as done.
 r=0; grep -qiE 'gate on that item|record the rest as a gate' "$EU" || r=1
 check $r "an unavailable tag/release is a recorded gate, not a redefined done"
