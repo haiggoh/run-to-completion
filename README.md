@@ -14,7 +14,7 @@ close out with an honest account of what was left and why.
 |---|---|---|
 | `autopilot` | whole run | Entry point for "run everything you can while I'm away." Sequences the three phases below as an explicit checklist, plus the up-front kickoff. |
 | `triage-for-autonomy` | before | Scores any queue — a to-do list, an issue tracker, plan steps, a persistent open-items store — into **do-now** / **autonomous-but-heavy** / **gated**, recording a gate reason per blocked item, and ranking the gated pile by how cheaply each one could be released. |
-| `execute-unattended` | during | Keeping moving: wrap-and-switch the instant something needs a human, reversibility before touching a file, and the ship loop that carries a change all the way out — verified, version-bumped, committed, pushed, **tagged**, **released** where that is how a consumer obtains it, refreshed in the *installed* copy, and then **dogfooded** there against real state. |
+| `execute-unattended` | during | Keeping moving: wrap-and-switch the instant something needs a human, reversibility before touching a file, and the ship loop that carries a change all the way out — verified, **dogfooded pre-merge** where the delivery mechanism can consume a local checkout, version-bumped, committed, pushed, **merged to the branch consumers actually resolve**, **tagged**, **released** where that is how a consumer obtains it, refreshed in the *installed* copy, and then **dogfooded** there against real state. |
 | `close-out-the-run` | after | Reconcile the durable records the run touched, stop cleanly at the gated boundary instead of churning, and write a wrap whose gated list says why each remaining item was left and how to resume it. |
 | `ungate-queue` | attended | The other half: walks the **blocked** pile *with* you, cheapest gate first, turning each gate reason into the one question that releases it — then **records the answer and stops**. It removes gates; it does not do the work it releases. |
 | `run-to-completion` | offer | The original rule, for a plan already in view in the conversation: offer continuous execution, ask blocking matter-of-taste questions up front, fold mid-run prompts in at task seams. |
@@ -75,11 +75,52 @@ an unattended run, unless you authorized that specific action's scope up front.
 `autopilot` deliberately asks for that scope during kickoff so the loop doesn't
 stall on it late.
 
+## Pushed is not shipped, and merging to test is backwards
+
+An installer or update command resolves an artifact from the repository's
+**default branch**. So a change that is committed and pushed to a working branch
+is not yet obtainable — and the steps that come after the push will refresh,
+confirm and exercise the *previous* version while reporting success. That green
+check is the dangerous part: it is indistinguishable from a real one. The loop
+therefore has an explicit step for landing the change on the ref consumers
+actually resolve, and `close-out-the-run` looks for work stranded on an unmerged
+branch, which reads as finished from the repository side.
+
+The fix is not to merge earlier. Merging *in order to test* makes the default
+branch the place unverified work lands, and the pressure to merge fast is exactly
+when verification gets skipped. Instead the loop dogfoods twice: **pre-merge**
+from the working branch, wherever the delivery mechanism can consume a local
+checkout (a local source, a path-based install, a link mode, an editable
+install) — which answers *does the behaviour work*; and **post-distribution**
+through the real fetch and install path — which answers the different question
+*does it work the way a consumer receives it*. Packaging-only failures surface
+nowhere but the second.
+
+Find out whether the pre-merge route **links** your checkout or **copies** it
+before trusting it, because a copy is the case that wastes an afternoon: the
+refresh command is often version-gated, so it reports "already up to date", exits
+0, and copies nothing, leaving you testing the old behaviour while every command
+succeeds. Verify with an observable change through the installed path, not with an
+exit code. And when that bites, do not edit the installed copy to move on — it is
+derived state that the next update overwrites silently, so the change can neither
+ship nor be trusted. Editing a derived copy to make a test pass means the loop is
+wrong, not the permissions.
+
+Where an installer can be pointed at a branch or commit, that is deliberately not
+the routine path: a pin written into a published catalog is mutable state where
+consumers read it, it keeps succeeding after the branch stops mattering, and
+removing it depends on someone remembering. Pinning is for holding consumers at a
+known-good version after a bad release.
+
 The ship loop makes this sharper rather than looser, because its own later steps
-publish: a pushed tag and a cut release are both visible and awkward to retract.
-So the scope is asked as a **depth** — cleared through push, through tag, or
-through release — instead of a bare yes to "may you push", which settles nothing
-about what comes after it. Where the depth stops, the loop stops with it: the
+publish: a merge to the default branch makes the change obtainable by everyone, and
+a pushed tag and a cut release are both visible and awkward to retract.
+So the scope is asked as a **depth** — cleared through push, through merge to
+the default branch, through tag, or through release — instead of a bare yes to
+"may you push", which settles nothing about what comes after it. Push and merge
+are separate depths because the gap between them is where "shipped" gets claimed
+too early: a pushed branch affects nobody, while landing it on the default branch
+is what makes the change obtainable. Where the depth stops, the loop stops with it: the
 remaining steps are recorded as a gate, and the run says which step it stopped at
 rather than calling the item done.
 
