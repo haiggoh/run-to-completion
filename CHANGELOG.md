@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1
+
+**A killed or timed-out test suite is UNKNOWN, never passing.** execute-unattended's verify
+step had no rule for a suite that did not finish, so an unattended run could report "tests
+pass" after a run that was killed partway, timed out, or was cut off by a tool limit. Step 1
+now counts only a run that finished and exited 0; anything else is recorded as UNKNOWN and
+gates the item instead of feeding a pass claim, a bump or a merge. (audit-loose-ends carries
+the matching check since 0.9.0, `verify-state.py` T1; skill observation 21.)
+
 ## 0.6.0
 
 **Pushed is not merged, and merging in order to test has the loop backwards.** The ship

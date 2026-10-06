@@ -147,6 +147,8 @@ check $r "the ship loop has a dogfood step"
 
 # Dogfooding is only meaningful if it is distinguished from the version check that precedes it --
 # otherwise a reader satisfies it by re-reading the version they just wrote.
+r=0; grep -qiE 'killed, timed out' "$EU" && grep -qiE 'UNKNOWN(\*\*)?, never as passing' "$EU" || r=1
+check $r "a killed or timed-out suite is UNKNOWN, never passing"
 r=0; grep -qiE 'version string.*(proves|evidence)|live and inert|live-and-inert' "$EU" || r=1
 check $r "says a correct version string is not evidence the feature works"
 
