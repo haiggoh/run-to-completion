@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.3
+
+**The ship loop verifies tag visibility immediately after pushing the tag.** New step,
+right between TAG and RELEASE: run `get-haiggoh plan` (or the repo's equivalent version
+check) and confirm it reports the new version. get-haiggoh fetches the HEAD manifest, so a
+manifest that disagrees with the tag — conflict markers, an unbumped version surface —
+reads as NO update: a broken release hiding behind a successful-looking push. If the plan
+does not see the update, stop and correct before continuing: align every version surface,
+move the tag onto the corrected commit, and say plainly that it moved. A broken update is
+worse than having shipped nothing at all. Measured 2026-10-14: free-agents 0.33.0 shipped
+with a conflict-marker manifest and every installer fell back to the old version until the
+manifest was fixed and the tag re-pointed.
+
+Versioning note: 0.6.2 belongs to the concurrent handoff-gating release from main; this
+branch numbers itself past it.
+
 ## 0.6.2
 
 **Gate handed-off steps on their async dependencies.** A step handed to the human because the
