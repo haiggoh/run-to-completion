@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.2
+
+**Gate handed-off steps on their async dependencies.** A step handed to the human because the
+session can't run it (a permission-gated command, a manual `!` run) is sequenced against in-flight
+work: wait for the dependency to land before showing the command, or label it "run after X
+returns". Prefer in-session execution where permitted — only the session knows the async state.
+(Observed 2026-10-13: a `gh release create` handed over while the tag-pushing subagent was still
+in flight published a tag at the wrong commit.)
+
 ## 0.6.1
 
 **A killed or timed-out test suite is UNKNOWN, never passing.** execute-unattended's verify

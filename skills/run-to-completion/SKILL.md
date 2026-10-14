@@ -22,6 +22,7 @@ This is an **offer**, not something to silently start doing. Say what you're pro
 2. **Run the plan to completion without stopping between steps.** Don't pause after each task to report progress and wait; keep moving through the plan.
 3. **Fold in interruptions at task seams.** If the user sends a mid-run message, or you discover something that would normally prompt a check-in, don't break stride mid-task — resolve it at the next natural seam between tasks.
 4. **Reserve stops for truly unweighable decisions.** Most forks in the road have a reasonable default with clear pros/cons — decide and note your reasoning in the response rather than stopping to ask. Only stop for a decision that genuinely cannot be weighed without the user's input (e.g. a subjective preference with no "better" answer, or something irreversible and consequential).
+5. **Gate handed-off steps on their async dependencies.** When a step must go to the human because the session can't run it (a permission-gated command, a manual `!` run), sequence it against in-flight work: wait until the dependency has landed before showing the command, or label it explicitly ("run this after X returns"). Prefer executing the step in-session when permitted — the session is the only party that knows the async state, so a handed-off command whose dependency is still in flight is a trap for the human. (Observed 2026-10-13: a `gh release create` handed over while the tag-pushing subagent was still in flight published a tag at the wrong commit.)
 
 ## What this does NOT relax
 
