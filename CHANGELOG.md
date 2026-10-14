@@ -13,6 +13,13 @@ worse than having shipped nothing at all. Measured 2026-10-14: free-agents 0.33.
 with a conflict-marker manifest and every installer fell back to the old version until the
 manifest was fixed and the tag re-pointed.
 
+- **No hard dependency on get-haiggoh**: the visibility check has a self-contained fallback,
+  `hooks/check-tag-visibility.py <repo-url> <installed-version>` (extracted from get-haiggoh's
+  diagnosis taxonomy, 0.9.0; keep in sync) — fetches the HEAD manifest, diagnoses conflict
+  markers / invalid JSON / a missing version key, reads the highest v-tag, and prints a
+  verbose VISIBLE / BROKEN-OR-HIDDEN verdict. Use it when get-haiggoh is not installed or
+  transiently unresponsive; `--self-test` asserts the taxonomy network-free.
+
 Versioning note: 0.6.2 belongs to the concurrent handoff-gating release from main; this
 branch numbers itself past it.
 
