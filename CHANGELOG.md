@@ -10,8 +10,10 @@ reads as NO update: a broken release hiding behind a successful-looking push. If
 does not see the update, stop and correct before continuing: align every version surface,
 move the tag onto the corrected commit, and say plainly that it moved. A broken update is
 worse than having shipped nothing at all. Measured 2026-10-14: free-agents 0.33.0 shipped
-with a conflict-marker manifest and every installer fell back to the old version until the
-manifest was fixed and the tag re-pointed.
+manifest was fixed and the tag re-pointed. Re-check ONCE after a short delay before
+concluding a miss: a read seconds after the push sits inside the host's propagation window
+(measured: raw + ls-remote served the pre-push state for about a minute), so a stale
+negative is not a verdict.
 
 - **No hard dependency on get-haiggoh**: the visibility check has a self-contained fallback,
   `hooks/check-tag-visibility.py <repo-url> <installed-version>` (extracted from get-haiggoh's
