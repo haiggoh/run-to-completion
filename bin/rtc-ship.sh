@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+# rtc-ship.sh — ship one milestone branch of ANY repo: rebase on origin/<default-branch>, the test
+# gates, fast-forward merge into that branch, an annotated tag built from the CHANGELOG entry, push,
+# a GitHub release with the repo's distributables, then refresh the installed plugin.
+#
+# "main" IN PROSE MEANS THE DEFAULT BRANCH, whatever it is called. Most repos use `main`; echoprism
+# uses `master`. A request to "merge to main" is resolved to this repo's actual default branch —
+# never to a branch literally named main, and certainly never by CREATING one, which would be a
+# second default and the worst kind of confusion.
+#
+# WHY THIS EXISTS. The ship loop was hand-rolled per repo, and the costliest failure was not a
+# wrong step but a SKIPPED one: the version bump lands after the test suite has already run, so a
+# split is introduced between "tests green" and "PR opened" and only a re-check catches it. Measured
+# 2026-10-24 — free-agents 0.43.2 shipped with VERSION at 0.43.1 while four other surfaces said
+# 0.43.2, because the repo's own version test ran with its verdict discarded. So the gates live here,
+# in one place, and a repo cannot skip them by forgetting to run its own script.
+#
+# Usage:
+#   rtc-ship.sh <worktree-dir> <version> "<release title summary>"
+#   rtc-ship.sh --test-only <worktree-dir>    run the gates and stamp the tree, ship nothing
+#   rtc-ship.sh --which-config                print the config this repo would use and exit
+#   rtc-ship.sh --help
+#
+# Per-repo specifics live in TWO places, both inside the repo being shipped:
+#   rtc-ship.json   DATA the tool needs: the tag prefix, which version surfaces to check, release
+#                   asset globs, the plugin to refresh, test worker count.
+#   .rtc/*.sh       COMMANDS only that repo has, run at named points if present and executable:
+#                     pre-flight.sh     extra gates, before anything else (a second venv's suite)
+#                     pre-package.sh    build the release assets
+#                     post-release.sh   after the release (a Homebrew tap trigger, say)
+#                   A repo with none of these is fully supported — hooks are opt-in by presence.
+#
+# Env:
+#   RTC_MAIN            canonical checkout (default: derived from the worktree's git common dir)
+#   RTC_SKIP_TESTS=1    skip the suite gates (prefer the tree stamp: a green run of THIS tree self-skips)
+#   RTC_TEST_WORKERS    xdist workers for the main suite (default 12)
+#   RTC_SKIP_REFRESH=1  do not refresh the installed plugin after a confirmed release
+set -euo pipefail
+
+usage() { sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; }
+T0=${SECONDS:-0}
+phase() { printf '[%4ss] %s\n' "$((SECONDS - T0))" "$*"; }
+
+# ----------------------------------------------------------------------------------------------
+# Config: DATA comes from rtc-ship.json; COMMANDS come from .rtc/*.sh. Neither is guessed.
+# ----------------------------------------------------------------------------------------------
+
+cfg_get() {  # cfg_get <key> [default] — one scalar out of rtc-ship.json
+  local key=$1 def=${2-} top toplevel
+  top=$(git -C "${RTC_REPO_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null) || top="${RTC_REPO_ROOT:-$PWD}"
+  RTC_CFG_FILE="$top/rtc-ship.json" python3 - "$key" "$def" <<'PY'
+import json, os, sys
+key, default = sys.argv[1], sys.argv[2]
+try:
+    with open(os.environ["RTC_CFG_FILE"]) as f:
+        v = json.load(f).get(key)
+except Exception:
+    v = None
+if v is None:
+    print(default)
+elif isinstance(v, bool):
+    print("1" if v else "0")
+else:
+    print(v)
+PY
+}
+
+# ----------------------------------------------------------------------------------------------
+# The version gate. The repo's OWN test wins when it has one; otherwise the config's declared
+# surfaces are checked here. Both paths print the table and both exit non-zero on a split — the
+# point of this script is that the gate cannot be skipped by not running it.
+# ----------------------------------------------------------------------------------------------
+
+version_gate() {
+  local top; top=$(git rev-parse --show-toplevel)
+  if [ -x "$top/tests/test_version_consistency.sh" ]; then
+    if ! bash "$top/tests/test_version_consistency.sh"; then
+      echo "✖ version surfaces disagree (the repo's own test) — ship refused" >&2; return 1
+    fi
+    return 0
+  fi
+  # No repo test: check what the config declares. A repo that declares fewer surfaces than it has
+  # will drift, but a repo that declares NONE gets a manifest+changelog check rather than nothing.
+  local manifest changelog vfile roadmap want mv cv vv rv
+  manifest=$(cfg_get "manifest" ".claude-plugin/plugin.json")
+  changelog=$(cfg_get "changelog" "CHANGELOG.md")
+  vfile=$(cfg_get "version_file" "")
+  roadmap=$(cfg_get "roadmap" "")
+  mv=$(python3 -c "import json,sys;print(json.load(open('$top/$manifest')).get('version',''))" 2>/dev/null || echo "")
+  # BOTH heading styles: Keep-a-Changelog permits `## 1.2.3` and `## [1.2.3]`, and this repo's own
+  # CHANGELOG uses the unbracketed form while free-agents' uses brackets.
+  cv=$(sed -n -E 's/^##+[[:space:]]+\[?([0-9]+\.[0-9]+\.[0-9]+)\]?.*/\1/p' "$top/$changelog" 2>/dev/null | head -1)
+  vv=""; [ -n "$vfile" ] && [ -f "$top/$vfile" ] && vv=$(tr -d '[:space:]' < "$top/$vfile")
+  rv=""; [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && rv=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' "$top/$roadmap" | head -1)
+  echo "  $manifest : ${mv:-<none>}"
+  echo "  $changelog (top entry) : ${cv:-<none>}"
+  [ -n "$vfile" ] && echo "  $vfile : ${vv:-<none>}"
+  [ -n "$roadmap" ] && echo "  $roadmap : ${rv:-<none>}"
+  local bad=0
+  # An EMPTY extraction is a FAILURE, never a pass. A gate that cannot find its input and then
+  # declares success is worse than no gate — it let a planted split through on the first run of
+  # this script, because an unreadable changelog silently skipped its comparison.
+  if [ -z "$mv" ]; then echo "✖ no version in $manifest" >&2; bad=1; fi
+  if [ -z "$cv" ]; then echo "✖ no numbered heading found in $changelog" >&2; bad=1
+  elif [ "$cv" != "$mv" ]; then echo "✖ changelog top is $cv, manifest says $mv" >&2; bad=1; fi
+  if [ -n "$vfile" ] && [ ! -f "$top/$vfile" ]; then echo "✖ $vfile is declared in the config but absent" >&2; bad=1
+  elif [ -n "$vv" ] && [ "$vv" != "$mv" ]; then echo "✖ $vfile says $vv, manifest says $mv" >&2; bad=1; fi
+  if [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && [ -n "$rv" ] && [ "$rv" != "$mv" ]; then
+    echo "✖ $roadmap says $rv, manifest says $mv" >&2; bad=1
+  fi
+  return "$bad"
+}
+
+# ----------------------------------------------------------------------------------------------
+# The suite gates: parallel pytest, plus a tree stamp so a tree that already passed is not re-run.
+# A repo's own extra gates go in .rtc/pre-flight.sh (free-agents' litellm/picker venvs, say).
+# ----------------------------------------------------------------------------------------------
+
+gates() {
+  local tree stamp d rc=0 pids=() names=() out
+  tree=$(git rev-parse 'HEAD^{tree}')
+  stamp="$(git rev-parse --git-common-dir)/rtc-tested/$tree"
+  if [ -e "$stamp" ]; then
+    phase "tests: tree ${tree:0:10} already passed every gate ($(date -r "$stamp" '+%H:%M')) — skipped"
+    return 0
+  fi
+  if [ -x .rtc/pre-flight.sh ]; then
+    if ./.rtc/pre-flight.sh; then phase "pre-flight gates: pass"
+    else rc=1; phase "✖ pre-flight gates FAILED"; fi
+  fi
+  # How this repo's tests run is the REPO'S business, not the tool's assumption. A pytest suite is
+  # the default, but a repo of shell suites would otherwise collect nothing and exit 5 — so the
+  # command comes from the config, and an UNCOLLECTED suite is a failure, never a silent pass.
+  local test_cmd; test_cmd=$(cfg_get "test_cmd" "")
+  d=$(mktemp -d)
+  if [ -n "$test_cmd" ]; then
+    if bash -c "$test_cmd" >"$d/main" 2>&1; then phase "tests (config): pass"
+    else phase "✖ tests (config) FAILED"; grep -E "FAIL|✖" "$d/main" | head -10 >&2; rc=1; fi
+  else
+    "$HOME/.local/bin/pytest" -q tests -p no:cacheprovider -n "${RTC_TEST_WORKERS:-12}" \
+      </dev/null >"$d/main" 2>&1 &
+    names+=(main); pids+=($!)
+  fi
+  local i ok
+  for i in "${!pids[@]}"; do
+    # wait FIRST, so the log is complete before it is classified.
+    ok=0; wait "${pids[$i]}" && ok=1
+    if [ "$ok" = 0 ]; then
+      rc=1; phase "✖ pytest ${names[$i]} FAILED: $(grep -E 'passed|failed|error' "$d/${names[$i]}" | tail -1)"
+      grep -E '^(FAILED|ERROR) ' "$d/${names[$i]}" | head -10 >&2
+    elif grep -q "no tests ran" "$d/${names[$i]}"; then
+      rc=1; phase "✖ pytest ${names[$i]} collected NO tests — declare a test_cmd in rtc-ship.json"
+    else
+      phase "pytest ${names[$i]}: $(grep -E 'passed|failed' "$d/${names[$i]}" | tail -1)"
+    fi
+  done
+  if [ "$rc" = 0 ]; then mkdir -p "$(dirname "$stamp")"; touch "$stamp"; rm -rf "$d"
+  else echo "✖ tests failed — full logs kept in $d" >&2; fi
+  return "$rc"
+}
+
+hook() {  # hook <name> — run a repo hook if it is present and executable
+  local name=$1
+  if [ -x ".rtc/$name" ]; then
+    if "./.rtc/$name"; then phase "hook $name: pass"; return 0
+    else phase "✖ hook $name FAILED"; return 1; fi
+  fi
+  return 0
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+  "") usage >&2; exit 2 ;;
+  --test-only) ;;
+  --versions-only) ;;
+  --which-config)
+    git rev-parse --show-toplevel
+    cfg_get "tag_prefix" "(none)"; exit 0 ;;
+  -*) echo "rtc-ship.sh: unrecognised option $1" >&2; usage >&2; exit 2 ;;
+esac
+
+if [ "$1" = --test-only ]; then
+  [ $# -eq 2 ] || { usage >&2; exit 2; }
+  cd "$2"
+  # FAIL, do not warn. A gate that reports a mismatch and exits 0 trains the operator to believe
+  # the ground is covered — that is exactly how a decorative check survives.
+  if ! version_gate; then echo "✖ version surfaces disagree — see above. Ship will refuse." >&2; exit 1; fi
+  gates; exit $?
+fi
+if [ "$1" = --versions-only ]; then
+  [ $# -eq 2 ] || { usage >&2; exit 2; }
+  cd "$2"
+  # The version gate ALONE — fast enough to run before every commit, and the only part a
+  # hand-rolled ship reliably skips.
+  if ! version_gate; then echo "✖ version surfaces disagree" >&2; exit 1; fi
+  phase "version surfaces agree"; exit 0
+fi
+[ $# -eq 3 ] || { usage >&2; exit 2; }
+
+WT=$1 V=$2 TITLE=$3
+cd "$WT"; WT=$(pwd)
+# -z, not -n: `[ -n "$out" ] || { dirty }` declares a CLEAN tree dirty and refuses every valid ship.
+[ -z "$(git status --porcelain)" ] || { echo "✖ $WT is dirty" >&2; exit 1; }
+BR=$(git branch --show-current)
+TOP=$(git rev-parse --show-toplevel)
+MAIN=${RTC_MAIN:-$(git rev-parse --git-common-dir | sed 's#/.git$##')}
+PREFIX=$(cfg_get "tag_prefix" "")
+# The default branch is NOT assumed. Config first (echoprism uses `master`), then the remote's own
+# HEAD, and only then `main` — a hardcoded `main` would mis-ship a whole repo.
+DEFAULT_BRANCH=$(cfg_get "default_branch" "")
+if [ -z "$DEFAULT_BRANCH" ]; then
+  DEFAULT_BRANCH=$(git -C "$MAIN" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null \
+                   | sed 's|^origin/||' || true)
+fi
+[ -n "$DEFAULT_BRANCH" ] || DEFAULT_BRANCH=main
+
+# --- the version gate, where a hand-rolled ship skips it --------------------------------
+# It runs AFTER the rebase and BEFORE the merge, because the bump lands between "suite green"
+# and "PR opened". This is the gate whose absence let 0.43.2 ship split.
+if ! version_gate; then echo "✖ version surfaces disagree — see above. Ship refused." >&2; exit 1; fi
+hook pre-flight || exit 1
+if [ "${RTC_SKIP_TESTS:-0}" != 1 ]; then gates || exit 1; fi
+
+cd "$MAIN"
+[ "$(git branch --show-current)" = "$DEFAULT_BRANCH" ] || { echo "✖ $MAIN not on $DEFAULT_BRANCH" >&2; exit 1; }
+[ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "✖ $MAIN has tracked changes" >&2; exit 1; }
+git fetch -q origin
+git pull -q --ff-only origin "$DEFAULT_BRANCH"
+git merge -q --ff-only "$BR"
+
+notes=$(awk -v v="$V" '$0 ~ "^##+[[:space:]]+\\[?"v"\\]?"{f=1;next} f && /^##/{exit} f' CHANGELOG.md)
+[ -n "$notes" ] || { echo "✖ no CHANGELOG entry for [$V]" >&2; exit 1; }
+git tag -a "${PREFIX}${V}" -m "$(basename "$MAIN") $V — $TITLE
+
+$notes"
+git push -q origin "$DEFAULT_BRANCH" "${PREFIX}${V}"
+phase "merged, tagged ${PREFIX}${V}, pushed"
+
+# --- assets: built by the repo's own hook, so the tool never hardcodes a filename ----------
+if [ -x "$TOP/.rtc/pre-package.sh" ]; then
+  ( cd "$TOP" && ./.rtc/pre-package.sh >/dev/null ) || { echo "✖ pre-package failed" >&2; exit 1; }
+fi
+mapfile -t ASSETS < <(cd "$TOP" && for g in $(cfg_get "assets" ""); do compgen -G "$g" || true; done | sort -u)
+nf=$(mktemp); printf '%s\n' "$notes" > "$nf"
+gh release create "${PREFIX}${V}" --title "$(basename "$MAIN") $V — $TITLE" --notes-file "$nf" \
+  "${ASSETS[@]}" >/dev/null
+rm -f "$nf"
+phase "release published${ASSETS:+ with ${#ASSETS[@]} asset(s)}"
+
+PLUGIN=$(cfg_get "refresh_plugin" "")
+if [ -n "$PLUGIN" ] && [ "${RTC_SKIP_REFRESH:-0}" != 1 ]; then
+  get-haiggoh apply --only "$PLUGIN" 2>&1 | sed 's/^/  /' || echo "⚠ refresh failed" >&2
+fi
+if [ -x "$TOP/.rtc/post-release.sh" ]; then
+  ( cd "$TOP" && ./.rtc/post-release.sh >/dev/null ) || echo "⚠ post-release hook failed" >&2
+fi
+phase "done — ${PREFIX}${V} is live"

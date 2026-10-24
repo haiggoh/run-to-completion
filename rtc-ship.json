@@ -1,0 +1,14 @@
+{
+  "_comment": "How rtc-ship.sh ships THIS repo. Data lives here; commands live in .rtc/. A repo with no .rtc/ directory is fully supported \u2014 hooks are opt-in by presence.",
+  "tag_prefix": "v",
+  "manifest": ".claude-plugin/plugin.json",
+  "changelog": "CHANGELOG.md",
+  "version_file": "",
+  "roadmap": "",
+  "assets": "",
+  "refresh_plugin": "run-to-completion",
+  "test_workers": 4,
+  "default_branch": "main",
+  "_comment_tests": "No pytest suite here: the tests are four shell suites, so the gate runs them via a declared test_cmd. An UNCOLLECTED suite is a failure, never a pass.",
+  "test_cmd": "for t in tests/test_*.sh; do bash \"$t\" || exit 1; done"
+}

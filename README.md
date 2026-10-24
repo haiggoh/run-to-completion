@@ -169,3 +169,26 @@ bash tests/test_skills.sh     # frontmatter + independence checks
 ## License
 
 MIT © Heiko Brantsch
+
+## Shipping a release: `bin/rtc-ship.sh`
+
+    rtc-ship.sh <worktree> <version> "<title>"     the full ship loop
+    rtc-ship.sh --test-only <worktree>            gates only, ship nothing
+    rtc-ship.sh --versions-only <worktree>        the version gate alone (fast, pre-commit)
+    rtc-ship.sh --which-config                    the config this repo uses
+
+The gates cannot be skipped by forgetting to run a script — they are *in* it, and the version gate
+runs after the rebase and **before the merge**, which is the only place it is still meaningful: the
+version bump lands *after* the test suite has run, so a split is introduced between "tests green"
+and "PR opened", and only a re-check catches it.
+
+A repo configures the tool with two things, both inside the repo and both committed:
+
+- **`rtc-ship.json`** — data: `tag_prefix` (`v` on most of our repos), which version surfaces
+  exist (`version_file`, `roadmap`), asset globs, the plugin to refresh, and `default_branch`.
+- **`.rtc/{pre-flight,pre-package,post-release}.sh`** — commands only that repo has. **Opt-in by
+  presence**: a repo with no `.rtc/` directory is fully supported.
+
+`default_branch` is resolved from config, then the remote's own `origin/HEAD`, and only then
+assumed to be `main` — echoprism uses `master`, and a hardcoded `main` would mis-ship it. In prose,
+"merge to main" means **this repo's default branch**, never a branch literally named `main`.

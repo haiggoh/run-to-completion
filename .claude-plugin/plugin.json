@@ -1,9 +1,23 @@
 {
   "name": "run-to-completion",
-  "version": "0.6.3",
-  "description": "Run a queue of open work to completion unattended: triage it into do-now / heavy / gated tiers, execute the autonomous pile without stopping between items, and close out with a gated list saying why each remaining item was left. Includes an autopilot orchestrator and a narrow attended pass that removes blockers — ranking them cheapest-to-release first — without doing the work it releases.",
-  "author": { "name": "Heiko Brantsch" },
+  "version": "0.6.4",
+  "description": "Run a queue of open work to completion unattended: triage it into do-now / heavy / gated tiers, execute the autonomous pile without stopping between items, and close out with a gated list saying why each remaining item was left. Includes an autopilot orchestrator and a narrow attended pass that removes blockers \u2014 ranking them cheapest-to-release first \u2014 without doing the work it releases.",
+  "author": {
+    "name": "Heiko Brantsch"
+  },
   "homepage": "https://github.com/haiggoh/run-to-completion",
   "license": "MIT",
-  "keywords": ["skill", "hook", "behavior", "autonomy", "planning", "execution", "workflow", "autopilot", "triage", "unattended", "queue"]
+  "keywords": [
+    "skill",
+    "hook",
+    "behavior",
+    "autonomy",
+    "planning",
+    "execution",
+    "workflow",
+    "autopilot",
+    "triage",
+    "unattended",
+    "queue"
+  ]
 }

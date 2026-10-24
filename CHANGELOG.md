@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.6.4] — 2026-10-24 — rtc-ship.sh, the generalized ship loop
+
+### Added — `bin/rtc-ship.sh`, the generalized ship loop
+
+The ship loop lived in `~/.claude/scripts/fa-ship.sh`, hand-rolled for one repo and then copied by
+memory into each repo shipped by hand. The costliest failure was never a wrong step — it was a
+**skipped** one: the version bump lands *after* the test suite has run, so a split is introduced
+between "tests green" and "PR opened", and only a re-check catches it. Measured 2026-10-24:
+free-agents 0.43.2 shipped with `VERSION` at 0.43.1 while four other surfaces said 0.43.2.
+
+`rtc-ship.sh <worktree> <version> "<title>"` runs the whole loop, and the gates cannot be skipped
+by forgetting to run the script — they are *in* it:
+
+- the version gate after the rebase and **before the merge** (the only place it is still
+  meaningful), preferring the repo's own `tests/test_version_consistency.sh` and falling back to
+  the surfaces declared in `rtc-ship.json`;
+- an empty extraction is a **failure**, never a pass — the first run of this script let a planted
+  split through precisely because an unreadable changelog silently skipped its comparison;
+- `--test-only`, `--versions-only` (fast, pre-commit), `--which-config`;
+- a tree stamp so a tree that already passed is not re-run;
+- ff-merge into main, an annotated tag from the CHANGELOG entry, push, release with the repo's
+  assets, installed-copy refresh, worktree cleanup.
+
+**Per-repo specifics are data and hooks, not forks.** `rtc-ship.json` at the repo root carries the
+tag prefix (most of our repos use `v`), which version surfaces exist, asset globs and the plugin
+to refresh. `.rtc/{pre-flight,pre-package,post-release}.sh` carry the commands only that repo
+has (free-agents' second-venv gates, its Homebrew tap trigger) and are **opt-in by presence** — a
+repo with no `.rtc/` is fully supported.
+
+`fa-ship.sh` stays in place for now: the concurrent session shipping free-agents still calls it.
+Its removal is waypoint `remove-fa-ship-sh-once-the`.
+
+### Fixed while building it, by running it
+
+- the dirty-tree check was **inverted** (`[ -n "$(git status …)" ] || { dirty }`) and would have
+  refused every valid ship;
+- the CHANGELOG extractor assumed the bracketed `## [1.2.3]` heading; Keep-a-Changelog also permits
+  `## 1.2.3`, which this repo uses;
+- an orphaned duplicate block left a stray `fi` — caught by `bash -n` before anything ran;
+- `changelog-prepend.py` had that same bracketed-only assumption and refused to add *this* entry
+  until it accepted both forms: the tool built to remove one class of slip contained it.
+
+### Verification
+
+`tests/test_rtc_ship.sh` (12): `--help` prints help and writes nothing; a consistent tree passes;
+a planted split fails and names the disagreeing surface; an unreadable changelog fails rather than
+passing silently; both heading styles parse; a repo with its own consistency test still passes.
+`--versions-only` also passes on free-agents and cost-tracker, each using its own test.
 ## 0.6.3
 
 **The ship loop verifies tag visibility immediately after pushing the tag.** New step,
