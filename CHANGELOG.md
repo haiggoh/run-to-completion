@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.6.6
+
+### Fixed — a release that looks complete but is not
+
+Two steps in the ship loop could fail without failing the ship, and both of them
+had already produced a release that read as successful:
+
+**An asset glob matching nothing published a release missing that asset.**
+`compgen -G` exits non-zero on a no-match glob and `|| true` swallowed it, so a
+typo'd or never-built glob dropped out of the asset list and
+`gh release create` ran without it. Nothing looks wrong until someone installs
+from the release. The globs are now resolved in the **main shell** — an `exit`
+inside a process substitution only leaves the subshell — and a glob matching
+nothing aborts the ship naming the glob.
+
+**A failing `.rtc/post-release.sh` only warned.** That hook is where a repo
+verifies the refresh it just performed (the installed copy is at `$V`, the tap
+formula points at this release). Warning and continuing let a release whose
+refresh silently did nothing still print `done — v1.2.3 is live`, which is the
+exact failure this loop exists to prevent: a success message over an unverified
+outcome. It now fails the ship and says the release is published but **not
+confirmed live**.
+
+### Added — `tests/test_ship_rehearsal.sh`
+
+The other ship test covered `--help` and the version gate, which left the
+irreversible half of the loop — merge, tag, push, publish, refresh — with **no
+coverage at all**, precisely where a silently skipped step cannot be undone. The
+rehearsal builds a scratch repo with a **local bare origin** and stubs
+`gh`/`get-haiggoh` to record what the loop asked of them, so every step runs for
+real without publishing anything. 18 assertions, both directions: the happy path
+proves the loop works, and each guard is planted with a defect to confirm it can
+actually go red.
+
 ## 0.6.5
 
 ### Fixed — a repo with no changelog ships without an empty release

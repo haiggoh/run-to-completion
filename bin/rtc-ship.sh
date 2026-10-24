@@ -263,7 +263,26 @@ phase "merged, tagged ${PREFIX}${V}, pushed"
 if [ -x "$TOP/.rtc/pre-package.sh" ]; then
   ( cd "$TOP" && ./.rtc/pre-package.sh >/dev/null ) || { echo "✖ pre-package failed" >&2; exit 1; }
 fi
-mapfile -t ASSETS < <(cd "$TOP" && for g in $(cfg_get "assets" ""); do compgen -G "$g" || true; done | sort -u)
+# Resolve the globs in the MAIN shell, not a process substitution: an `exit` inside `< <(...)`
+# only leaves that subshell, so a glob matching nothing would be dropped, the pipe would carry on
+# with the globs that DID match, and the ship would publish a release missing an asset while
+# reporting success — indistinguishable from a working release until someone tries to install it.
+ASSETS=(); MISSING=()
+for g in $(cfg_get "assets" ""); do
+  [ -n "$g" ] || continue
+  # `|| true` inside the substitution: a non-matching glob makes compgen exit non-zero, and that
+  # status becomes the assignment's own — under `set -e` it aborts the ship before the message
+  # below can say WHICH glob failed. Exit code 1 with no reason is the failure this loop prevents.
+  m=$(cd "$TOP" && compgen -G "$g" || true)
+  if [ -z "$m" ]; then MISSING+=("$g"); else
+    while IFS= read -r f; do [ -n "$f" ] && ASSETS+=("$f"); done <<< "$m"
+  fi
+done
+if [ "${#MISSING[@]}" -gt 0 ]; then
+  echo "✖ asset glob(s) matched nothing in $TOP: ${MISSING[*]}" >&2
+  echo "  the release would ship without them — fix the packaging hook or the glob" >&2
+  exit 1
+fi
 if [ -n "$notes" ]; then
   nf=$(mktemp); printf '%s\n' "$notes" > "$nf"
   gh release create "${PREFIX}${V}" --title "$(basename "$MAIN") $V — $TITLE" \
@@ -283,6 +302,13 @@ if [ -n "$PLUGIN" ] && [ "${RTC_SKIP_REFRESH:-0}" != 1 ]; then
   get-haiggoh apply --only "$PLUGIN" 2>&1 | sed 's/^/  /' || echo "⚠ refresh failed" >&2
 fi
 if [ -x "$TOP/.rtc/post-release.sh" ]; then
-  ( cd "$TOP" && ./.rtc/post-release.sh >/dev/null ) || echo "⚠ post-release hook failed" >&2
+  # FAIL, do not warn. post-release is where a repo verifies the refresh it just performed (the
+  # installed copy is at $V, the tap formula points at this release). A warning here lets a release
+  # whose refresh silently did nothing print "done — v1.2.3 is live", which is the exact failure
+  # this loop exists to prevent: a success message over an unverified outcome.
+  if ! ( cd "$TOP" && ./.rtc/post-release.sh >/dev/null ); then
+    echo "✖ post-release hook failed — the release is published but NOT confirmed live" >&2
+    exit 1
+  fi
 fi
 phase "done — ${PREFIX}${V} is live"

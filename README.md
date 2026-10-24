@@ -189,6 +189,21 @@ A repo configures the tool with two things, both inside the repo and both commit
 - **`.rtc/{pre-flight,pre-package,post-release}.sh`** — commands only that repo has. **Opt-in by
   presence**: a repo with no `.rtc/` directory is fully supported.
 
+Two guards make a *silent* half-ship impossible, because both produced a release that looked
+complete and was not:
+
+- **An asset glob that matches nothing fails the ship.** `compgen -G` exits non-zero on no match
+  and `|| true` used to swallow it, so a release published **with an asset missing** while the loop
+  reported success — the worst shape of failure, because nothing looks wrong until someone tries
+  to install from it.
+- **A failing `.rtc/post-release.sh` fails the ship.** That hook is where a repo verifies the
+  refresh it just performed; warning and continuing let a release whose installed copy is still the
+  old version print "done — v1.2.3 is live".
+
+`tests/test_ship_rehearsal.sh` rehearses the whole loop — merge, tag, push, release, refresh —
+against a **local origin with a stubbed `gh`**, so the irreversible half is covered without
+publishing anything.
+
 `default_branch` is resolved from config, then the remote's own `origin/HEAD`, and only then
 assumed to be `main` — echoprism uses `master`, and a hardcoded `main` would mis-ship it. In prose,
 "merge to main" means **this repo's default branch**, never a branch literally named `main`.
