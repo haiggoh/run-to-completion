@@ -228,7 +228,26 @@ git fetch -q origin
 git pull -q --ff-only origin "$DEFAULT_BRANCH"
 git merge -q --ff-only "$BR"
 
-notes=$(awk -v v="$V" '$0 ~ "^##+[[:space:]]+\\[?"v"\\]?"{f=1;next} f && /^##/{exit} f' CHANGELOG.md)
+# Extracted with python, not an awk program assembled from quoted fragments: the bracket-optional
+# heading form plus an interpolated version made a regex too fragile to trust in shell quoting.
+# Both heading styles are accepted (## 1.2.3 and ## [1.2.3]).
+notes=$(CHANGELOG_FILE=CHANGELOG.md VERSION="$V" python3 - <<'PY'
+import os, re, sys
+path, version = os.environ["CHANGELOG_FILE"], os.environ["VERSION"]
+text = open(path, encoding="utf-8", errors="replace").read()
+m = re.search(r"^##+[ \t]+\[?" + re.escape(version) + r"\]?\b", text, re.M)
+if not m:
+    sys.exit(1)
+# Skip to the end of the HEADING line: a heading may carry a date and title after the version
+# (`## [0.6.4] — 2026-10-24 — …`), and those are not release notes.
+nl = text.find("\n", m.end())
+rest = text[len(text) if nl == -1 else nl + 1:]
+# Stop at the next SAME-LEVEL heading only: `##+` would also match `###`, truncating every
+# entry at its first sub-heading and producing an empty release note.
+nxt = re.search(r"^##(?!#)", rest, re.M)
+sys.stdout.write(rest[:nxt.start()] if nxt else rest)
+PY
+) || { echo "✖ no CHANGELOG entry for [$V]" >&2; exit 1; }
 [ -n "$notes" ] || { echo "✖ no CHANGELOG entry for [$V]" >&2; exit 1; }
 git tag -a "${PREFIX}${V}" -m "$(basename "$MAIN") $V — $TITLE
 
