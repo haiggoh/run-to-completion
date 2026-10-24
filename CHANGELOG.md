@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.7
+
+### Fixed — the version gate read "/" wherever there was no git repo
+
+`version_gate` resolved its repo root with `git rev-parse --show-toplevel` and
+did **not** fall back when that failed — while `cfg_get`, two functions above
+it, did. In any directory with no `.git` above it the two therefore disagreed
+about where the repo was, and `top` came back **empty**, so every surface was
+read through `/`:
+
+    .claude-plugin/plugin.json : <none>
+    CHANGELOG.md (top entry)   : <none>
+    ✖ no version in .claude-plugin/plugin.json
+
+A perfectly consistent tree reported as disagreeing. This is not only the
+installed plugin cache — it is every extracted release tarball, which is exactly
+where a user checks a version. Caught by **dogfooding the installed 0.6.6**: its
+own suites passed (18/18 rehearsal, 18/18 gate in the repo) while the installed
+copy's gate called 0.6.6 split against itself.
+
+Both call sites now share one `resolve_top()`, so they cannot drift apart again,
+and the new assertion runs the gate in a scratch directory with no repo at all.
 ## 0.6.6
 
 ### Fixed — a release that looks complete but is not

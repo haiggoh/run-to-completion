@@ -78,5 +78,20 @@ is "an explicit config key overrides the remote's HEAD"    "$(resolve_branch "tr
 is "a repo with its own test still passes" \
    "$("$ROOT/bin/rtc-ship.sh" --versions-only "$HOME/ClaudeWorkspace/cost-tracker" >/dev/null 2>&1; echo $?)" "0"
 
+# The gate must resolve its repo root even where there is NO git repo. The installed plugin cache
+# is a plain directory, and free-agents' release tarball extracts into one too. `git rev-parse
+# --show-toplevel` failing there left `top` EMPTY, so both surfaces were read through "/" and came
+# back "<none>" — a perfectly consistent tree reported as disagreeing. (Found by dogfooding the
+# installed 0.6.6: its own suite passed while this gate called 0.6.6 split against itself.)
+NG="$TMP/nongit"; mkdir -p "$NG/.claude-plugin"
+cp "$ROOT/.claude-plugin/plugin.json" "$NG/.claude-plugin/"
+ngv=$(python3 -c "import json;print(json.load(open('$NG/.claude-plugin/plugin.json'))['version'])")
+printf '# Changelog\n\n## %s\n\nconsistent\n' "$ngv" > "$NG/CHANGELOG.md"
+"$ROOT/bin/rtc-ship.sh" --versions-only "$NG" >"$TMP/ng" 2>&1
+is "the gate works outside a git repo (the installed cache is not one)" "0" "$?"
+is "and actually READ the surfaces rather than reporting <none>" \
+   "$(grep -c '<none>' "$TMP/ng")" "0"
+is "and it agrees with itself" "$(grep -c 'version surfaces agree' "$TMP/ng")" "1"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

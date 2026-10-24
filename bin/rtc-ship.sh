@@ -45,9 +45,15 @@ phase() { printf '[%4ss] %s\n' "$((SECONDS - T0))" "$*"; }
 # Config: DATA comes from rtc-ship.json; COMMANDS come from .rtc/*.sh. Neither is guessed.
 # ----------------------------------------------------------------------------------------------
 
+resolve_top() {  # the repo root, or $PWD where there is NO git repo (see below)
+  local base=${RTC_REPO_ROOT:-$PWD} t
+  t=$(git -C "$base" rev-parse --show-toplevel 2>/dev/null) || t=""
+  printf '%s\n' "${t:-$base}"
+}
+
 cfg_get() {  # cfg_get <key> [default] — one scalar out of rtc-ship.json
   local key=$1 def=${2-} top toplevel
-  top=$(git -C "${RTC_REPO_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null) || top="${RTC_REPO_ROOT:-$PWD}"
+  top=$(resolve_top)
   RTC_CFG_FILE="$top/rtc-ship.json" python3 - "$key" "$def" <<'PY'
 import json, os, sys
 key, default = sys.argv[1], sys.argv[2]
@@ -72,7 +78,11 @@ PY
 # ----------------------------------------------------------------------------------------------
 
 version_gate() {
-  local top; top=$(git rev-parse --show-toplevel)
+  # THE SAME resolver cfg_get uses, and for the same reason: an installed plugin cache is a plain
+  # directory with no .git anywhere above it, and so is an extracted release tarball. Letting `git
+  # rev-parse` fail left `top` EMPTY, so every surface was read through "/" and came back "<none>"
+  # — a consistent tree reported as disagreeing. Found by dogfooding installed 0.6.6.
+  local top; top=$(resolve_top)
   if [ -x "$top/tests/test_version_consistency.sh" ]; then
     if ! bash "$top/tests/test_version_consistency.sh"; then
       echo "✖ version surfaces disagree (the repo's own test) — ship refused" >&2; return 1
