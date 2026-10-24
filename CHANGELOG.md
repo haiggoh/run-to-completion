@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.5
+
+### Fixed — a repo with no changelog ships without an empty release
+
+`rtc-ship.json`'s `changelog` may be empty, which is what a **web-app** repo
+(echoprism: `package.json`, no `CHANGELOG.md`) needs. The version gate then
+checks the manifest alone and says the changelog is unchecked rather than
+failing on a file that was never promised, and the release notes fall back to
+`gh --generate-notes` instead of being written from nothing.
+
+An earlier version of this same script shipped an **empty** release body once
+already (a `sed` failed silently and the notes file was zero bytes), so the
+fallback is generated notes rather than an empty file — an empty release is a
+release nobody reads. The empty-extraction-is-a-failure rule still holds for a
+repo that *declares* a changelog; it is only an undeclared one that is skipped.
+
+Also fixed while here: a leftover `[ -n "$notes" ]` guard from the previous
+patch blocked the no-changelog path entirely.
+
+### Verification
+
+Gate verified on a throwaway repo whose only surface is `package.json`: with no
+changelog declared it agrees and says so. With one surface there is nothing to
+disagree with, which is the correct answer rather than a gap — a split needs at
+least two surfaces. `tests/test_rtc_ship.sh` still 15/15.
+
 ## [0.6.4] — 2026-10-24 — rtc-ship.sh, the generalized ship loop
 
 ### Added — `bin/rtc-ship.sh`, the generalized ship loop

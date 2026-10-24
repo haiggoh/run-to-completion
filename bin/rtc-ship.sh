@@ -101,7 +101,12 @@ version_gate() {
   # declares success is worse than no gate — it let a planted split through on the first run of
   # this script, because an unreadable changelog silently skipped its comparison.
   if [ -z "$mv" ]; then echo "✖ no version in $manifest" >&2; bad=1; fi
-  if [ -z "$cv" ]; then echo "✖ no numbered heading found in $changelog" >&2; bad=1
+  if [ -z "$changelog" ]; then
+    # A repo may legitimately have no changelog at all (echoprism: package.json, no CHANGELOG.md).
+    # Saying so beats failing on a file that was never promised.
+    echo "  (no changelog declared — not checked)"
+    cv=$mv
+  elif [ -z "$cv" ]; then echo "✖ no numbered heading found in $changelog" >&2; bad=1
   elif [ "$cv" != "$mv" ]; then echo "✖ changelog top is $cv, manifest says $mv" >&2; bad=1; fi
   if [ -n "$vfile" ] && [ ! -f "$top/$vfile" ]; then echo "✖ $vfile is declared in the config but absent" >&2; bad=1
   elif [ -n "$vv" ] && [ "$vv" != "$mv" ]; then echo "✖ $vfile says $vv, manifest says $mv" >&2; bad=1; fi
@@ -231,7 +236,7 @@ git merge -q --ff-only "$BR"
 # Extracted with python, not an awk program assembled from quoted fragments: the bracket-optional
 # heading form plus an interpolated version made a regex too fragile to trust in shell quoting.
 # Both heading styles are accepted (## 1.2.3 and ## [1.2.3]).
-notes=$(CHANGELOG_FILE=CHANGELOG.md VERSION="$V" python3 - <<'PY'
+notes=$(if [ -f CHANGELOG.md ]; then CHANGELOG_FILE=CHANGELOG.md VERSION="$V" python3 - <<'PYEOF'
 import os, re, sys
 path, version = os.environ["CHANGELOG_FILE"], os.environ["VERSION"]
 text = open(path, encoding="utf-8", errors="replace").read()
@@ -246,9 +251,8 @@ rest = text[len(text) if nl == -1 else nl + 1:]
 # entry at its first sub-heading and producing an empty release note.
 nxt = re.search(r"^##(?!#)", rest, re.M)
 sys.stdout.write(rest[:nxt.start()] if nxt else rest)
-PY
-) || { echo "✖ no CHANGELOG entry for [$V]" >&2; exit 1; }
-[ -n "$notes" ] || { echo "✖ no CHANGELOG entry for [$V]" >&2; exit 1; }
+PYEOF
+else echo ""; fi)
 git tag -a "${PREFIX}${V}" -m "$(basename "$MAIN") $V — $TITLE
 
 $notes"
@@ -260,10 +264,18 @@ if [ -x "$TOP/.rtc/pre-package.sh" ]; then
   ( cd "$TOP" && ./.rtc/pre-package.sh >/dev/null ) || { echo "✖ pre-package failed" >&2; exit 1; }
 fi
 mapfile -t ASSETS < <(cd "$TOP" && for g in $(cfg_get "assets" ""); do compgen -G "$g" || true; done | sort -u)
-nf=$(mktemp); printf '%s\n' "$notes" > "$nf"
-gh release create "${PREFIX}${V}" --title "$(basename "$MAIN") $V — $TITLE" --notes-file "$nf" \
-  "${ASSETS[@]}" >/dev/null
-rm -f "$nf"
+if [ -n "$notes" ]; then
+  nf=$(mktemp); printf '%s\n' "$notes" > "$nf"
+  gh release create "${PREFIX}${V}" --title "$(basename "$MAIN") $V — $TITLE" \
+    --notes-file "$nf" "${ASSETS[@]}" >/dev/null
+  rm -f "$nf"
+else
+  # No changelog to draw notes from (a repo may legitimately have none). Let gh derive them from
+  # the commits rather than shipping an EMPTY body — which is what the first version of this script
+  # did, and an empty release is a release nobody reads.
+  gh release create "${PREFIX}${V}" --title "$(basename "$MAIN") $V — $TITLE" \
+    --generate-notes "${ASSETS[@]}" >/dev/null
+fi
 phase "release published${ASSETS:+ with ${#ASSETS[@]} asset(s)}"
 
 PLUGIN=$(cfg_get "refresh_plugin" "")
