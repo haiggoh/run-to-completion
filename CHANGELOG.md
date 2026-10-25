@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.10
+
+### Added — version surfaces and version facts in the ship loop
+
+execute-unattended's ship loop gains the version discipline step 3 needs to be honest,
+migrated out of private notes: enumerate the repo's version surfaces rather than
+recalling them (extension-less files such as a bare `VERSION` are invisible to
+extension-filtered sweeps; a repo's own version-consistency test is the real gate);
+check `git tag -l` before adding bullets to a CHANGELOG section, because a fast-forward
+merge cannot conflict and a released section silently swallows new bullets; and how to
+derive which commit shipped which version — read blobs (`git log --full-history -m`,
+or walk `rev-list --first-parent`) instead of trusting a path-filtered log that drops
+merge commits, group commits into the NEXT bump at or after them, and date a release
+by its own bump commit.
+
 ## 0.6.9
 
 ### Added — every shippable repo is COVERED, durably

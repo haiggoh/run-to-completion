@@ -96,6 +96,29 @@ If no pre-merge route exists, say so and rely on step 11 — but check for one b
 
 If you find you cannot tag or release — no permission, no remote, no such surface — that is a gate on that item, recorded like any other. Do not quietly redefine the item as done at step 4.
 
+### Version surfaces and version facts
+
+- **Enumerate the repo's version surfaces, not your recollection of them.** The manifest
+  and the changelog are the easy two; drift lives in the extras — a bare `VERSION` file, a
+  roadmap's "current version" line — and extension-less files are invisible to
+  extension-filtered sweeps, so list the repo root rather than grepping by extension. If
+  the repo carries its own version-consistency test, run it and treat its pass as the bump
+  being complete: a hand-rolled check of one or two surfaces was never the gate, and a
+  surface list held in your head is a stale value waiting to happen.
+- **Check whether a CHANGELOG section's version already shipped before adding to it.**
+  After a rebase or a fast-moving main, "version X is unreleased" is a fact about the
+  world that may have changed — `git tag -l "vX.Y.Z"` (or `git tag --contains`) decides.
+  A fast-forward merge cannot conflict, so nothing else will stop a released section from
+  silently swallowing new bullets.
+- **Deriving which commit shipped which version: read blobs, don't trust a filtered
+  log.** `git log -- <path>` applies history simplification and drops merge commits, so a
+  bump made on a merge looks fictional — real releases have been reported as
+  never-existing this way. Use `git log --full-history -m`, or walk
+  `git rev-list --first-parent` and read the blob at each commit. When grouping commits
+  into releases, a commit belongs to the **next** version bump at or after it (a commit
+  made after one bump still reads the old version), and a release's date is the date of
+  **its** bump commit, never of the commit being described.
+
 ## Milestone wraps
 
 Emit a short status after each completed item and keep going. The wrap is for the human reading later, not a request for permission.
