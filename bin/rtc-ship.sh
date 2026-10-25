@@ -307,9 +307,39 @@ else
 fi
 phase "release published${ASSETS:+ with ${#ASSETS[@]} asset(s)}"
 
+installed_version() {  # installed_version <plugin> — the version the INSTALLED cache holds, or ""
+  local plugin=$1 base best v
+  # Overridable so a test can point at a scratch cache: the real one is tool-owned state, and a
+  # ship must never read (let alone write) it except through the tool that owns it.
+  base=${RTC_PLUGIN_CACHE:-$HOME/.claude/plugins/cache}
+  for d in "$base"/*/"$plugin"; do
+    [ -d "$d" ] || continue
+    # Versionless numeric sort: the cache dirs are named by version and there is no index to read.
+    best=$(find "$d" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)
+    [ -n "$best" ] || continue
+    v=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("version",""))' \
+        "$best/.claude-plugin/plugin.json" 2>/dev/null) || v=""
+    [ -n "$v" ] && { printf '%s\n' "$v"; return 0; }
+  done
+  return 0
+}
+
 PLUGIN=$(cfg_get "refresh_plugin" "")
 if [ -n "$PLUGIN" ] && [ "${RTC_SKIP_REFRESH:-0}" != 1 ]; then
   get-haiggoh apply --only "$PLUGIN" 2>&1 | sed 's/^/  /' || echo "⚠ refresh failed" >&2
+  # VERIFY it moved — invoking is not the same as landing. `get-haiggoh` exits 0 having copied
+  # NOTHING when the manifest it reads is still the old version (a raw.githubusercontent.com
+  # propagation window, a stale marketplace cache, an unbumped manifest), so a green exit code
+  # says nothing about whether the installed copy is now $V. Measured 2026-10-25 on 0.6.7: this
+  # loop printed "done — v0.6.7 is live" and exited 0 while the installed copy was still 0.6.6,
+  # and only a manual retry landed it. fa-ship.sh checked this; the generalization dropped it.
+  got=$(installed_version "$PLUGIN")
+  if [ "$got" != "$V" ]; then
+    echo "✖ the installed $PLUGIN is at ${got:-<none>}, not $V — the refresh did not land" >&2
+    echo "  re-run once after a short delay (the manifest is served by a CDN), then: get-haiggoh apply --only $PLUGIN" >&2
+    exit 1
+  fi
+  phase "installed $PLUGIN is $V"
 fi
 if [ -x "$TOP/.rtc/post-release.sh" ]; then
   # FAIL, do not warn. post-release is where a repo verifies the refresh it just performed (the

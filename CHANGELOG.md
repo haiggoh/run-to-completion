@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.8
+
+### Fixed — the refresh is VERIFIED, not just invoked
+
+`get-haiggoh apply` exits **0 having copied nothing** whenever the manifest it
+reads is still the old version — a raw.githubusercontent.com propagation window,
+a stale marketplace cache, an unbumped manifest. A green exit code therefore says
+nothing about whether the installed copy is now `$V`, and the loop was treating it
+as proof. Measured on 0.6.7: the loop printed `done — v0.6.7 is live`, exited 0,
+and the installed copy was still 0.6.6 — a release nobody could install until a
+manual retry landed it.
+
+The installed version is now read out of the cache and compared, and a mismatch
+fails the ship naming both versions. `fa-ship.sh` had this check; generalizing it
+into `rtc-ship.sh` dropped it, which is the same shape as the two defects fixed in
+0.6.6 — a step that can fail silently, reported as success.
+
+The cache root is overridable (`RTC_PLUGIN_CACHE`) so the rehearsal can point at a
+scratch cache: a ship must never read, let alone write, tool-owned plugin state
+except through the tool that owns it.
+
 ## 0.6.7
 
 ### Fixed — the version gate read "/" wherever there was no git repo

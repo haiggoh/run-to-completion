@@ -81,13 +81,24 @@ JSON
     'printf "get-haiggoh %s\n" "$*" >> "$CALLS"' \
     'exit 0' > "$d/bin/get-haiggoh"
   chmod +x "$d/bin/gh" "$d/bin/get-haiggoh"
+  # The normal case: the refresh lands, so the scratch cache already holds the shipped version.
+  fake_cache "$d" 0.2.0
 }
 
 ship() {  # ship <dir> [extra rtc-ship args...] — run the loop with the stubs on PATH
   local d=$1; shift
   ( cd "$d/wt" && CALLS="$d/calls" PATH="$d/bin:$PATH" RTC_SKIP_TESTS=1 \
+      RTC_PLUGIN_CACHE="$d/cache" \
       "$ROOT/bin/rtc-ship.sh" "$d/wt" "$@" ) >"$d/out" 2>&1
   echo $?
+}
+
+fake_cache() {  # fake_cache <dir> <version> — what the installed plugin cache claims to hold
+  local d=$1 v=$2
+  rm -rf "$d/cache"
+  mkdir -p "$d/cache/haiggoh/rehearsal/$v/.claude-plugin"
+  printf '{\n  "name": "rehearsal",\n  "version": "%s"\n}\n' "$v" \
+    > "$d/cache/haiggoh/rehearsal/$v/.claude-plugin/plugin.json"
 }
 
 D="$TMP/r1"; rehearse "$D"
@@ -146,6 +157,24 @@ PY
 is "declared assets ship" "0" "$(ship "$D" 0.2.0 'second')"
 has "and the asset is handed to gh release create" "$(cat "$D/calls")" "dist/rehearsal-0.2.0.tar.gz"
 has "and the count is reported" "$(cat "$D/out")" "1 asset"
+
+# ---------------------------------------------------------------------------------------------
+# The refresh must be VERIFIED, not just invoked. `get-haiggoh` exits 0 having copied nothing when
+# the manifest it reads is still the old version (a raw.githubusercontent.com propagation window,
+# a stale marketplace cache, an unbumped manifest) — so a green exit code says nothing about
+# whether the installed copy is now $V. Measured on 0.6.7: the loop printed "done — v0.6.7 is
+# live" and exited 0 while the installed copy was still 0.6.6, and only a manual retry landed it.
+# fa-ship.sh checked this; the generalization into rtc-ship.sh dropped the check.
+# ---------------------------------------------------------------------------------------------
+D="$TMP/r5"; rehearse "$D"; fake_cache "$D" 0.2.0
+is "a refresh that moved the version ships" "0" "$(ship "$D" 0.2.0 'second')"
+has "and reports the installed version" "$(cat "$D/out")" "installed"
+
+D="$TMP/r6"; rehearse "$D"; fake_cache "$D" 0.1.0
+rc=$(ship "$D" 0.2.0 'second')
+is "a refresh that did NOT move the version FAILS the ship" "1" "$rc"
+has "and names both the installed and the shipped version" "$(cat "$D/out")" "is at 0.1.0, not 0.2.0"
+is "and does not claim the release is live" "0" "$(grep -c 'is live' "$D/out")"
 
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

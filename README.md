@@ -199,6 +199,10 @@ complete and was not:
 - **A failing `.rtc/post-release.sh` fails the ship.** That hook is where a repo verifies the
   refresh it just performed; warning and continuing let a release whose installed copy is still the
   old version print "done — v1.2.3 is live".
+- **The refresh itself is verified.** `get-haiggoh apply` exits 0 having copied nothing when the
+  manifest it reads is still the old version (a CDN propagation window, a stale marketplace
+  cache), so a green exit code is not proof. The installed version is read back and compared, and
+  a mismatch fails the ship naming both versions.
 
 `tests/test_ship_rehearsal.sh` rehearses the whole loop — merge, tag, push, release, refresh —
 against a **local origin with a stubbed `gh`**, so the irreversible half is covered without
