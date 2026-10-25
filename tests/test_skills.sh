@@ -205,5 +205,37 @@ check $r "an unavailable tag/release is a recorded gate, not a redefined done"
 r=0; grep -qiE 'whole.*ship loop|name the step' "$SKILLS/close-out-the-run/SKILL.md" || r=1
 check $r "close-out verifies the ship loop ran to its end"
 
+echo "== Case F: writing-execution-plans is an additive layer, not a second plan writer =="
+# The layer exists for plans another agent executes. It must ADD what a general plan-writing skill
+# lacks and say so -- restating decomposition and test steps is how two plan skills drift apart.
+WEP="$SKILLS/writing-execution-plans/SKILL.md"
+r=0; [ -f "$WEP" ] || r=1; check $r "writing-execution-plans skill exists"
+r=0; grep -qiE 'do not restate|does not restate' "$WEP" 2>/dev/null || r=1
+check $r "it declares itself additive (does not restate the base plan skill)"
+for need in 'authority matrix' 'phase 0' 'receipt' 'known-bad|planted' 'adversarial review' 'side.effect'; do
+  r=0; grep -qiE "$need" "$WEP" 2>/dev/null || r=1; check $r "layer covers: $need"
+done
+r=0; grep -qiE 'executor.{0,40}(not|other than|different)|different (agent|session|executor)' "$WEP" 2>/dev/null || r=1
+check $r "its trigger names a different executor"
+r=0; [ -f "$SKILLS/writing-execution-plans/references/plan-template.md" ] || r=1
+check $r "the template lives in references/, not the skill body"
+r=0; words=$(awk 'BEGIN{n=0} /^---$/{c++; next} c>=2{n+=NF} END{print n}' "$WEP" 2>/dev/null); [ "${words:-9999}" -le 900 ] || r=1
+check $r "the layer stays lean (body <= 900 words, got ${words:-none})"
+
+echo "== Case G: autopilot asks run scope as a neutral question =="
+AP="$SKILLS/autopilot/SKILL.md"
+r=0; grep -qiE 'scoped run' "$AP" && grep -qiE 'whole.queue run' "$AP" || r=1
+check $r "autopilot offers both a scoped run and a whole-queue run"
+r=0; grep -qiE 'neither (is )?(labelled |marked )?recommended|equally legitimate' "$AP" || r=1
+check $r "autopilot presents the two scopes as equals"
+r=0; grep -qiE 'noticed, not touched' "$AP" "$SKILLS/close-out-the-run/SKILL.md" || r=1
+check $r "a scoped run reports out-of-scope findings without touching them"
+
+echo "== Case H: a long-running delegate is not idle-polled =="
+r=0; grep -qiE 'while a delegate runs long|while a long.running delegate' "$EU" || r=1
+check $r "execute-unattended covers the wait for a long-running delegate"
+r=0; grep -qiE 'idle.poll' "$EU" && grep -qiE 'files? the delegate (will not|won.t) touch' "$EU" || r=1
+check $r "it says: no idle-polling, interim work only in files the delegate will not touch"
+
 echo; echo "PASS=$pass FAIL=$fail"
 [ "$fail" -eq 0 ]

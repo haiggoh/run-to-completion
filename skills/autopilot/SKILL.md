@@ -15,6 +15,13 @@ Do this once before triage:
 2. **Warm any delegate lanes.** A delegate is not necessarily one thing: local inference and free/cheap remote APIs are two independent lanes, and a run can use either or both — including in parallel, when independent items are ready at the same time and each lane has spare capacity. Start whichever lane(s) exist in the background so the first delegation is not a cold start. Capture whatever address, port, or endpoint each warm-up reports.
 3. **Ask blocking questions about THE RUN — and only about the run.** Scope, and permission for any push, publish, or confirmation-gated action. Ask for the **ship-loop depth** as one question — cleared through push, through merge to the default branch, through tag, or through release — rather than a bare yes to “may you push”, because the loop's later steps publish and a run with nobody present cannot widen its own permission when it reaches one. Do not stop for those again.
 
+   **Ask the run's scope as one neutral question:** a **scoped run** (an agreed set of items, and the
+   repositories they may touch) or a **whole-queue run** (everything triage finds actionable). Both are
+   equally legitimate; which fits depends on what the user intends that day, so neither is labelled
+   recommended and neither is assumed when the answer is missing — no answer, no start. In a scoped run,
+   record the agreed items and repositories where the run's goal lives, triage and execute only those,
+   and report anything else you come across as "noticed, not touched" in the close-out.
+
    **The asymmetry that makes this work:** kickoff questions are about the *run*; a question about a *specific item* discovered during triage becomes a **gate on that item**, never a kickoff question. Otherwise kickoff degenerates into interrogating sixty items one by one, which defeats the entire point of "clear what you can while I am away" — the user walks away precisely so they do not have to answer things.
 
    The corollary cuts the other way and is just as important: **a known question is a gate, and work sitting *before* that question is actionable.** So an item that ends in a question is not thereby excluded from the run.

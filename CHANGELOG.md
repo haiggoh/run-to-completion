@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.7.0
+
+### Added — `writing-execution-plans`, an additive layer for plans someone else executes
+
+A general plan-writing skill decides what gets built. A plan handed to a different executor — a
+successor session, a delegated or smaller model, an unattended run — also needs what that reader
+cannot ask for: an authority matrix (clearance for one boundary never implies the next), a forced
+Phase 0 preflight (three strategy sentences, then read-only discovery; a new worktree does not carry
+uncommitted work), receipts with a known-bad discriminant, side-effect classification (a `--dry-run`
+is not presumed harmless) and an adversarial review. The skill adds only those and says it does not
+restate decomposition or test steps; its template lives in `references/plan-template.md`.
+
+- New tests (Case F) pin the additive contract, the six layer sections, the different-executor
+  trigger, the template location and a 900-word body budget.
+
+### Changed — autopilot asks the run's scope as one neutral question
+
+Kickoff now asks for a **scoped run** (agreed items and the repositories they may touch) or a
+**whole-queue run**. Both are equally legitimate — the fit depends on what the user intends that day —
+so neither is labelled recommended and neither is assumed when the answer is missing. A scoped run
+pulls nothing else and reports what it came across as "noticed, not touched". (Case G.)
+
+### Added — execute-unattended: while a delegate runs long
+
+One progress check, then prepare the next phase, reconcile stale records, or finish leftover work in
+files the delegate will not touch — never idle-poll, never run suites against the tree it works in.
+Generalised from a free-lane handover rule that applied to any long-running delegate. (Case H.)
+
 ## 0.6.12
 
 ### Fixed — `--help` documents the tag-visibility env vars it reads

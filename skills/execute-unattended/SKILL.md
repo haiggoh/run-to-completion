@@ -135,6 +135,16 @@ Decide per step whether a cheaper delegate does it, and decide it up front rathe
 
 **Decide before you read the inputs, and watch the distribution.** If you open the material to judge whether delegating is worth it, the expensive part is already spent and delegating afterwards is theatre — so "I have already read it" means the decision came too late, not that you should keep it. And note that "needs my judgement" and "not worth the overhead" between them can excuse *every* step: each call looks fine alone, so the tell is the aggregate. If a run delegates **nothing**, that is the thing to justify, once, explicitly — not a per-step shrug.
 
+### While a delegate runs long
+
+Silence from a briefed delegate (a background agent, a workflow, a long build) is normal, not a fault.
+Check **once** whether it is stuck or slow — its transcript or log tail, the working tree's status —
+then stop watching: every idle-poll is a turn spent doing nothing. Use the wait, in this order: prepare
+the next phase (read the code it touches, pre-verify the data shapes it depends on, draft its brief);
+reconcile records the finished phases made stale; finish leftover docs or gates in
+files the delegate will not touch. Never edit a file it may write, and never run full suites or mutation batteries against
+the tree it is working in. Keep interim changes in their own commit so its eventual diff stays readable.
+
 ## What autonomy does not relax
 
 Destructive or hard-to-reverse actions still need explicit confirmation. This includes deleting data, force-pushing, publishing to a shared or public destination, or changing shared infrastructure. Get that authorization in the up-front question pass so the loop does not stall on it late.
