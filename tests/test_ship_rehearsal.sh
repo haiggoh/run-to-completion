@@ -51,7 +51,9 @@ rehearse() {  # rehearse <dir> — build the scratch repo; caller then edits and
   "refresh_plugin": "rehearsal"
 }
 JSON
-    git add -A && git commit -qm first && git remote add origin "$d/origin.git"
+    git add -A && git commit -qm first
+    git config url."$d/origin.git".insteadOf https://github.com/haiggoh/rehearsal.git
+    git remote add origin https://github.com/haiggoh/rehearsal.git
     git push -q origin main
     git worktree add -q "$d/wt" -b feat/ship
   )
@@ -65,6 +67,13 @@ JSON
     git add -A && git commit -qm bump
   )
   mkdir -p "$d/bin"
+  # The stub CDN: serve the manifest an installer would parse. Without it the visibility gate
+  # reaches the real raw.githubusercontent.com for a repo that does not exist.
+  cat > "$d/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf '{"name":"rehearsal","version":"%s"}\n' "$PUBLISHED_VERSION"
+STUB
+  chmod +x "$d/bin/curl"
   # The gh stub records the release notes BODY too, not just the argv: "the notes came from the
   # CHANGELOG" is a claim about content, and an argv-only stub cannot see it.
   printf '%s\n' \
@@ -88,7 +97,7 @@ JSON
 ship() {  # ship <dir> [extra rtc-ship args...] — run the loop with the stubs on PATH
   local d=$1; shift
   ( cd "$d/wt" && CALLS="$d/calls" PATH="$d/bin:$PATH" RTC_SKIP_TESTS=1 \
-      RTC_PLUGIN_CACHE="$d/cache" \
+      RTC_PLUGIN_CACHE="$d/cache" RTC_TAG_VISIBILITY_DELAY=0 PUBLISHED_VERSION=0.2.0 \
       "$ROOT/bin/rtc-ship.sh" "$d/wt" "$@" ) >"$d/out" 2>&1
   echo $?
 }
@@ -175,6 +184,36 @@ rc=$(ship "$D" 0.2.0 'second')
 is "a refresh that did NOT move the version FAILS the ship" "1" "$rc"
 has "and names both the installed and the shipped version" "$(cat "$D/out")" "is at 0.1.0, not 0.2.0"
 is "and does not claim the release is live" "0" "$(grep -c 'is live' "$D/out")"
+# ---------------------------------------------------------------------------------------------
+# The tag must be VISIBLE, not merely pushed. `git push` returns before the host SERVES the new
+# state, and the window is real (measured 2026-10-14: raw + ls-remote served the pre-push state for
+# about a minute). The refresh reads the PUBLISHED MANIFEST from that CDN, so a ship that moves on
+# immediately can print "done — v1.2.3 is live" while every installer still resolves the previous
+# version. Measured on 0.6.7: exactly that, and only a manual retry landed it.
+# ---------------------------------------------------------------------------------------------
+D="$TMP/r7"; rehearse "$D"
+PUBLISHED_VERSION=0.2.0
+d=$D
+cat > "$d/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+# the stub CDN: serve the manifest an installer would parse, at whatever version it is told
+printf '{"name":"rehearsal","version":"%s"}
+' "$PUBLISHED_VERSION"
+STUB
+chmod +x "$d/bin/curl"
+is "a visible tag ships" "0" "$(cd "$d/wt" && PUBLISHED_VERSION=0.2.0 CALLS="$d/calls" PATH="$d/bin:$PATH" RTC_PLUGIN_CACHE="$d/cache" RTC_SKIP_TESTS=1 RTC_TAG_VISIBILITY_DELAY=0 bash "$ROOT/bin/rtc-ship.sh" "$d/wt" 0.2.0 'second' >/dev/null 2>&1; echo $?)"
+
+D="$TMP/r8"; rehearse "$D"; d=$D
+cat > "$d/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+# the stub CDN: serve the manifest an installer would parse, at whatever version it is told
+printf '{"name":"rehearsal","version":"%s"}
+' "$PUBLISHED_VERSION"
+STUB
+chmod +x "$d/bin/curl"
+# the CDN is still serving the PREVIOUS version, and never catches up
+rc=$(cd "$d/wt" && PUBLISHED_VERSION=0.1.0 RTC_TAG_VISIBILITY_TRIES=2 RTC_TAG_VISIBILITY_DELAY=0 CALLS="$d/calls" PATH="$d/bin:$PATH" RTC_PLUGIN_CACHE="$d/cache" RTC_SKIP_TESTS=1 RTC_TAG_VISIBILITY_DELAY=0 bash "$ROOT/bin/rtc-ship.sh" "$d/wt" 0.2.0 'second' >/dev/null 2>&1; echo $?)
+is "an INVISIBLE tag fails the ship" "1" "$rc"
 
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

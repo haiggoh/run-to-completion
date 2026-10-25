@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6.11
+
+### Fixed — the tag must be VISIBLE, not merely pushed
+
+`git push` returns **before the host serves the new state**, and the window is real
+(measured 2026-10-14: raw + ls-remote served the pre-push state for about a minute).
+The refresh step resolves the **published manifest** from that CDN, so a ship that
+moved on immediately could print `done — v1.2.3 is live` while every installer still
+resolved the previous version.
+
+Measured on 0.6.7, in this repo, by this loop: the tag and the release were pushed and
+the loop reported success, while `get-haiggoh apply` read the stale manifest, printed
+`0.6.6 (current)` and copied **nothing**. Only a manual retry landed it.
+
+This is the fifth silent-failure class in this loop — after `compgen … || true`
+dropping an asset, a `post-release.sh` failure downgraded to a warning, an
+unresolvable repo root read as `/`, and a refresh invoked but never verified. Every
+one had the same shape: **a step that could fail without failing the ship.**
+
+The loop now polls the published manifest, names what it actually declares, retries
+once after a delay, and **refuses to create the release** while installers still see
+the old version — so a failure leaves a pushed tag and no release, which is clean to
+redo rather than a release nobody can install. `RTC_TAG_VISIBILITY=0` disables it for
+a repo whose install path is not a published manifest; `RTC_TAG_VISIBILITY_TRIES` /
+`RTC_TAG_VISIBILITY_DELAY` tune the poll.
+
+25 rehearsal assertions. The rehearsal's origin now *presents* as a GitHub URL while
+resolving to a local bare repo (`url.<local>.insteadOf`) — which is what the check
+parses, and a closer model of the real thing than a local path.
+
 ## 0.6.10
 
 ### Added — version surfaces and version facts in the ship loop

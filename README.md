@@ -203,6 +203,11 @@ complete and was not:
   manifest it reads is still the old version (a CDN propagation window, a stale marketplace
   cache), so a green exit code is not proof. The installed version is read back and compared, and
   a mismatch fails the ship naming both versions.
+- **The tag must be VISIBLE, not merely pushed.** A push returns before the host serves the new
+  state, so installers can still resolve the previous version while the loop reports success —
+  measured on 0.6.7, where the release was live and `get-haiggoh` copied nothing. The loop polls
+  the published manifest and refuses to create the release until it declares `$V`, leaving a pushed
+  tag and no release, which is clean to redo.
 
 `tests/test_ship_rehearsal.sh` rehearses the whole loop — merge, tag, push, release, refresh —
 against a **local origin with a stubbed `gh`**, so the irreversible half is covered without

@@ -269,6 +269,43 @@ $notes"
 git push -q origin "$DEFAULT_BRANCH" "${PREFIX}${V}"
 phase "merged, tagged ${PREFIX}${V}, pushed"
 
+# --- the tag must be VISIBLE, not merely pushed ------------------------------------------------
+# A push returns BEFORE the host serves the new state, and the window is real (measured 2026-10-14:
+# raw + ls-remote served the pre-push state for about a minute). The refresh step resolves the
+# published MANIFEST from that CDN, so a ship that moves on immediately can print "done — v1.2.3 is
+# live" while every installer still resolves the previous version. Measured on 0.6.7: exactly that
+# — get-haiggoh read the stale manifest, reported "0.6.6 (current)" and copied nothing, and only a
+# manual retry landed it. The fifth silent-failure class in this loop.
+published_version() {  # the version the PUBLISHED manifest declares, or "" if it cannot be read
+  local url body owner_repo
+  url=$(git -C "$MAIN" remote get-url origin 2>/dev/null) || return 0
+  owner_repo=$(printf '%s' "$url" | sed -e 's#^git@github.com:#github/#' -e 's#^https://github.com/##' \
+                                        -e 's#^https://##' -e 's#\.git$##')
+  case "$owner_repo" in */*) ;; *) return 0 ;; esac     # a local-path remote: nothing to check
+  body=$(curl -fsS --max-time 20 \
+    "https://raw.githubusercontent.com/$owner_repo/$DEFAULT_BRANCH/$(cfg_get manifest .claude-plugin/plugin.json)" 2>/dev/null) || body=""
+  printf '%s' "$body" | sed -n -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1
+  return 0
+}
+
+if [ "${RTC_TAG_VISIBILITY:-1}" = 1 ]; then
+  vis_tries=0
+  while :; do
+    got=$(published_version)
+    if [ "$got" = "$V" ]; then phase "tag ${PREFIX}${V} is VISIBLE to installers"; break; fi
+    vis_tries=$((vis_tries + 1))
+    if [ "$vis_tries" -ge "${RTC_TAG_VISIBILITY_TRIES:-6}" ]; then
+      echo "✖ the published manifest declares ${got:-<nothing>}, not $V — installers still resolve the old version" >&2
+      echo "  the tag and the branch are pushed, but nothing is released yet. Re-check, then re-run:" >&2
+      echo "    curl -s https://raw.githubusercontent.com/<owner>/<repo>/$DEFAULT_BRANCH/$(cfg_get manifest .claude-plugin/plugin.json)" >&2
+      echo "    rtc-ship.sh $WT $V \"$TITLE\"" >&2
+      exit 1
+    fi
+    phase "tag not visible yet (${got:-<nothing>}) — waiting ${RTC_TAG_VISIBILITY_DELAY:-20}s (try $vis_tries/${RTC_TAG_VISIBILITY_TRIES:-6})"
+    sleep "${RTC_TAG_VISIBILITY_DELAY:-20}"
+  done
+fi
+
 # --- assets: built by the repo's own hook, so the tool never hardcodes a filename ----------
 if [ -x "$TOP/.rtc/pre-package.sh" ]; then
   ( cd "$TOP" && ./.rtc/pre-package.sh >/dev/null ) || { echo "✖ pre-package failed" >&2; exit 1; }
