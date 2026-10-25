@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.9
+
+### Added — every shippable repo is COVERED, durably
+
+A repo reaches the version gate by one of two routes: its own
+`tests/test_version_consistency.sh`, or the declared-surface fallback in
+`rtc-ship.json`. The fallback was only ever exercised by two repos, and nothing
+checked that a repo using it declared **every** version surface it actually has —
+so a repo with a `VERSION` file and a `ROADMAP` that declares neither ships with
+two of its four surfaces unchecked while the gate still prints "version surfaces
+agree".
+
+`tests/test_declared_surface.sh` audits every repo under `RTC_REPOS_ROOT`
+(default `$HOME/ClaudeWorkspace`; absent ⇒ the test skips) and asserts, per repo,
+that the gate passes, that it **read** every surface it printed (a `<none>` means
+it compared nothing — the 0.6.7 defect shape), and that each surface existing on
+disk is either declared or deliberately undeclared. Worktrees are excluded — a
+worktree is the same repo as its parent and would double-count.
+
+12 repos audited, 64 assertions. Mutation-checked: a scratch repo carrying an
+undeclared `VERSION` file turns it red.
+
 ## 0.6.8
 
 ### Fixed — the refresh is VERIFIED, not just invoked
