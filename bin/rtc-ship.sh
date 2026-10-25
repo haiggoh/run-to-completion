@@ -35,9 +35,15 @@
 #   RTC_SKIP_TESTS=1    skip the suite gates (prefer the tree stamp: a green run of THIS tree self-skips)
 #   RTC_TEST_WORKERS    xdist workers for the main suite (default 12)
 #   RTC_SKIP_REFRESH=1  do not refresh the installed plugin after a confirmed release
+#   RTC_TAG_VISIBILITY=0        skip the published-manifest check (default: on, it gates the release)
+#   RTC_TAG_VISIBILITY_TRIES    polls before giving up (default 6; the CDN window is ~1 minute)
+#   RTC_TAG_VISIBILITY_DELAY    seconds between polls (default 20)
 set -euo pipefail
 
-usage() { sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; }
+# Print every header comment line up to the first line of real code. NOT a hardcoded line range:
+# `sed -n '2,31p'` silently hid every line added past 31, which is how a gate shipped with its own
+# env vars documented in the source and invisible in --help (measured on 0.6.11).
+usage() { awk 'NR>1 && !/^#/ {exit} {sub(/^# ?/, ""); print}' "$0"; }
 T0=${SECONDS:-0}
 phase() { printf '[%4ss] %s\n' "$((SECONDS - T0))" "$*"; }
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.12
+
+### Fixed — `--help` documents the tag-visibility env vars it reads
+
+0.6.11 shipped a live gate that reads three env vars and named none of them in its
+own `--help`. The installed copy proved it: zero occurrences of `RTC_TAG_VISIBILITY`
+in the help text, while the gate was gating its own release. A script that reads a
+variable and does not say so is a lie by omission — the flag works and is invisible to
+anyone probing the tool.
+
 ## 0.6.11
 
 ### Fixed — the tag must be VISIBLE, not merely pushed

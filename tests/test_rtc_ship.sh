@@ -23,6 +23,18 @@ before=$(md5 -q "$ROOT/CHANGELOG.md" 2>/dev/null || echo x)
 "$ROOT/bin/rtc-ship.sh" --help >"$TMP/help" 2>&1
 is "--help exits 0" "$?" "0"
 is "--help prints a usage block" "$(grep -c 'rtc-ship.sh <worktree-dir>' "$TMP/help")" "1"
+
+# --help must document EVERYTHING the script reads. `usage()` used to print a hardcoded line range,
+# so any env var added past line 31 was live and invisible — 0.6.11 shipped its tag-visibility gate
+# exactly that way. Assert the LAST documented env var too, so a range regression fails here.
+for v in RTC_MAIN RTC_SKIP_TESTS RTC_TEST_WORKERS RTC_SKIP_REFRESH RTC_TAG_VISIBILITY \
+         RTC_TAG_VISIBILITY_TRIES RTC_TAG_VISIBILITY_DELAY; do
+  # -w matters: RTC_TAG_VISIBILITY must not be "documented" by a line about its _TRIES sibling
+  is "--help documents $v" "1" "$(grep -cw -- "$v" "$TMP/help")"
+done
+# and the LAST line of the header really is printed (the fixed-range bug's signature)
+is "--help prints to the end of the header, not a fixed line range" \
+   "1" "$(grep -c 'RTC_TAG_VISIBILITY_DELAY' "$TMP/help")"
 after=$(md5 -q "$ROOT/CHANGELOG.md" 2>/dev/null || echo x)
 is "--help writes nothing" "$before" "$after"
 
