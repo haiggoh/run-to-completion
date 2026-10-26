@@ -167,6 +167,25 @@ is "declared assets ship" "0" "$(ship "$D" 0.2.0 'second')"
 has "and the asset is handed to gh release create" "$(cat "$D/calls")" "dist/rehearsal-0.2.0.tar.gz"
 has "and the count is reported" "$(cat "$D/out")" "1 asset"
 
+# A STALE build in the canonical checkout must neither break nor leak into the release. Measured
+# 2026-10-26 (free-agents 0.46.2): the loop runs the asset step after `cd "$MAIN"`, and an
+# unquoted `for g in $(cfg_get assets)` pathname-expanded `dist/free-agents-*.tar.gz` THERE — into
+# the previous release's leftover `dist/free-agents-0.46.1.tar.gz` — so compgen in the worktree
+# matched nothing and the release failed after the tag was pushed. The relative paths it hands gh
+# would have uploaded MAIN's stale files even with the glob fixed, so the paths must be absolute.
+D="$TMP/r4b"; rehearse "$D"
+python3 - "$D/wt/rtc-ship.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p)); d["assets"] = "dist/rehearsal-*.tar.gz"
+open(p, "w").write(json.dumps(d, indent=2) + "\n")
+PY
+( cd "$D/wt" && git add -A && git commit -qm 'declare assets' )
+mkdir -p "$D/main/dist" && echo stale > "$D/main/dist/rehearsal-0.1.0.tar.gz"   # untracked leftover
+is "a stale build in the canonical checkout does not fail the ship" "0" "$(ship "$D" 0.2.0 'second')"
+has "gh gets the WORKTREE's asset by absolute path" "$(cat "$D/calls")" "$D/wt/dist/rehearsal-0.2.0.tar.gz"
+is "and never the canonical checkout's stale build" "0" "$(grep -c 'rehearsal-0.1.0' "$D/calls")"
+
 # ---------------------------------------------------------------------------------------------
 # The refresh must be VERIFIED, not just invoked. `get-haiggoh` exits 0 having copied nothing when
 # the manifest it reads is still the old version (a raw.githubusercontent.com propagation window,
