@@ -321,6 +321,13 @@ fi
 # with the globs that DID match, and the ship would publish a release missing an asset while
 # reporting success — indistinguishable from a working release until someone tries to install it.
 ASSETS=(); MISSING=()
+# `set -f` around the split: each pattern arrives as ONE word from the config, and an unquoted
+# for-word PATHNAME-EXPANDS against the CURRENT directory — which is $MAIN here, after the merge
+# (measured 2026-10-26, free-agents 0.46.2: MAIN held the previous release's leftover
+# dist/free-agents-0.46.1.tar.gz, the pattern expanded into literal filenames THERE, and compgen
+# in the worktree then matched nothing — aborting the ship AFTER the tag was pushed). The shell
+# must split the value but never glob it; compgen -G below is the only globber, and it runs in $TOP.
+set -f
 for g in $(cfg_get "assets" ""); do
   [ -n "$g" ] || continue
   # `|| true` inside the substitution: a non-matching glob makes compgen exit non-zero, and that
@@ -328,9 +335,16 @@ for g in $(cfg_get "assets" ""); do
   # below can say WHICH glob failed. Exit code 1 with no reason is the failure this loop prevents.
   m=$(cd "$TOP" && compgen -G "$g" || true)
   if [ -z "$m" ]; then MISSING+=("$g"); else
-    while IFS= read -r f; do [ -n "$f" ] && ASSETS+=("$f"); done <<< "$m"
+    # Absolute, worktree-anchored paths: gh runs with cwd=$MAIN, so a relative asset name would
+    # hand it MAIN's file — the stale build this loop exists to avoid. A match that is already
+    # absolute (the config declared an absolute pattern) is passed through untouched.
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      case $f in /*) ASSETS+=("$f") ;; *) ASSETS+=("$TOP/$f") ;; esac
+    done <<< "$m"
   fi
 done
+set +f
 if [ "${#MISSING[@]}" -gt 0 ]; then
   echo "✖ asset glob(s) matched nothing in $TOP: ${MISSING[*]}" >&2
   echo "  the release would ship without them — fix the packaging hook or the glob" >&2
