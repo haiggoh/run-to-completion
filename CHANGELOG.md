@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.8.1
+
+### Fixed — asset resolution is anchored to the worktree, not the canonical checkout
+
+- The declared asset globs are matched by `compgen` in the worktree, but the `for` loop over
+  `cfg_get assets` was unquoted — so each pattern PATHNAME-EXPANDED against the current
+  directory first, which is the canonical checkout after the merge `cd`. A leftover build
+  there (free-agents' `dist/free-agents-0.46.1.tar.gz`, measured 2026-10-26) expanded the
+  pattern into literal filenames, `compgen` in the worktree then matched nothing, and the
+  ship aborted AFTER the tag was pushed. The loop now runs under `set -f`: the shell splits
+  the config value but never globs it.
+- Assets are handed to `gh release create` as absolute, worktree-anchored paths. Relative
+  paths resolve against gh's cwd ($MAIN), which would have uploaded the canonical checkout's
+  stale build even with the glob fixed.
+- Regression `tests/test_ship_rehearsal.sh` r4b plants a stale canonical-checkout build and
+  pins all three directions: the ship succeeds, gh receives the worktree's absolute path,
+  and the stale build never appears. Seen red 25/3 before the fix, green 28/0 after; full
+  suite 227/0 across 7 suites.
+
 ## 0.8.0
 
 ### Added — `rtc-ship.sh` on PATH is a shim, so an update needs no re-wiring
