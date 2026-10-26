@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.8.0
+
+### Added — `rtc-ship.sh` on PATH is a shim, so an update needs no re-wiring
+
+- `install/link-shortcuts.sh` installs `~/.local/bin/rtc-ship.sh` as a **shim** instead
+  of the symlink it was. A symlink freezes the version at install time, so every plugin
+  update left the tool on PATH running the OLD copy until the wiring was re-run by hand —
+  and this is the tool that drives every other repo's rebase/test/merge/tag/release
+  loop, so a stale copy ships the wrong process everywhere.
+- The shim body is `install/shim-template.sh`, the same contract cost-tracker and
+  audit-loose-ends already ship: resolve per call in one documented order
+  (`RUN_TO_COMPLETION_PLUGIN` → the `installPath` that `installed_plugins.json` records
+  → the highest cache dir → exit 1), answer `--which` with the target it would exec, and
+  forward every other argument untouched — intercepting `--help` would break any target
+  that takes its own.
+- The resolution cache is keyed on the registry's **content checksum**, not its mtime: a
+  registry rewritten twice inside the same second has an identical mtime on macOS, so a
+  mtime-keyed cache serves the stale answer. Measured in cost-tracker before it was
+  specified here.
+- Anything replaced is backed up with its mode preserved; a plain file this plugin did
+  not write is **refused** (exit 1) unless `--force`.
+- `tests/test_link_shortcuts.sh` (new, 24 cases), RED-verified (20 failures with the
+  implementation removed) and mutation-checked three ways — an inert registry step, an
+  installer that writes symlinks, and an installer that refuses nothing each turn the
+  new assertions red.
+
+### Fixed
+
+- The entry point was a symlink into a workspace checkout, so a branch switch there
+  silently changed which `rtc-ship.sh` every repo shipped with.
+
 ## 0.7.0
 
 ### Added — `writing-execution-plans`, an additive layer for plans someone else executes

@@ -154,6 +154,27 @@ without adding signal. Making it a plugin (rather than one project's local
 > plugins. Add the marketplace once from there, then install `run-to-completion`
 > by name. This repo ships the plugin itself, not a marketplace catalog.
 
+### Putting `rtc-ship.sh` on PATH
+
+The ship tool lives at `~/.local/bin/rtc-ship.sh`, and `install/link-shortcuts.sh`
+installs it as a **shim** — a small generated file that resolves the installed plugin
+copy on every call — rather than a symlink:
+
+```
+bash install/link-shortcuts.sh --dry-run   # show what would change, write nothing
+bash install/link-shortcuts.sh             # back up anything replaced, then install
+bash install/link-shortcuts.sh --force     # also replace a file this plugin did not write
+```
+
+Because it resolves per call, a plugin update takes effect with **no re-wiring**, and a
+branch switch in a workspace checkout changes nothing live. Re-running is safe: when the
+path already carries the `# haiggoh-shim v1` header it changes nothing. Ask it where it
+resolved with `~/.local/bin/rtc-ship.sh --which`.
+
+Anything replaced is copied to `~/.claude/backups/run-to-completion-link-<timestamp>/`
+with its mode preserved, and a plain file this plugin did not write is **refused** rather
+than overwritten unless you pass `--force`.
+
 ## Install — Claude Desktop / claude.ai (copy-paste)
 
 These apps have no plugin marketplace. Open
