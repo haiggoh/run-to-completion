@@ -137,9 +137,23 @@ version_gate() {
 # A repo's own extra gates go in .rtc/pre-flight.sh (free-agents' litellm/picker venvs, say).
 # ----------------------------------------------------------------------------------------------
 
+worktree_tree() {  # the tree id of what the suites will actually read: the WORKING tree
+  # Keyed on HEAD^{tree}, uncommitted edits rode on an earlier stamp and --test-only skipped them
+  # (measured 2026-10-27). Hash the working tree into a TEMPORARY index (seeded from the real one
+  # for git's stat cache) so the real index is never touched. A clean tree hashes to HEAD^{tree},
+  # so the ship path's stamp lookup is unchanged; ignored files are, rightly, not part of the key.
+  local idx id rc
+  idx=$(mktemp) || return 1
+  rm -f "$idx"; cp "$(git rev-parse --git-path index)" "$idx" 2>/dev/null || :
+  id=$(GIT_INDEX_FILE=$idx git add -A -- ':/' 2>/dev/null && GIT_INDEX_FILE=$idx git write-tree); rc=$?
+  rm -f "$idx"
+  [ "$rc" = 0 ] && [ -n "$id" ] || return 1
+  printf '%s\n' "$id"
+}
+
 gates() {
   local tree stamp d rc=0 pids=() names=() out
-  tree=$(git rev-parse 'HEAD^{tree}')
+  tree=$(worktree_tree) || { echo "✖ could not hash the working tree for the test stamp" >&2; return 1; }
   stamp="$(git rev-parse --git-common-dir)/rtc-tested/$tree"
   if [ -e "$stamp" ]; then
     phase "tests: tree ${tree:0:10} already passed every gate ($(date -r "$stamp" '+%H:%M')) — skipped"
@@ -191,7 +205,12 @@ gates() {
     if wait "$pf_pid"; then phase "pre-flight gates: pass"
     else rc=1; phase "✖ pre-flight gates FAILED"; tail -30 "$d/pre-flight" >&2; fi
   fi
-  if [ "$rc" = 0 ]; then mkdir -p "$(dirname "$stamp")"; touch "$stamp"; rm -rf "$d"
+  # Stamp only the tree that was tested: an edit DURING the run means neither the tree the suites
+  # started on nor the one now on disk is proven green.
+  if [ "$rc" = 0 ] && [ "$(worktree_tree)" != "$tree" ]; then
+    phase "tests passed, but the working tree changed during the run — NOT stamped; rerun to cache it"
+    rm -rf "$d"
+  elif [ "$rc" = 0 ]; then mkdir -p "$(dirname "$stamp")"; touch "$stamp"; rm -rf "$d"
   else echo "✖ tests failed — full logs kept in $d" >&2; fi
   return "$rc"
 }

@@ -37,6 +37,9 @@ mkrepo() {  # mkrepo <dir> [test_workers-json-value]
   mkdir -p "$d/.claude-plugin" "$d/tests" "$d/.rtc" "$d/home/.local/bin"
   printf '{"name":"g","version":"0.1.0"}\n' > "$d/.claude-plugin/plugin.json"
   printf '# Changelog\n\n## 0.1.0\n\nx\n' > "$d/CHANGELOG.md"
+  # The harness logs inside the repo; ignored, as a real repo's test artifacts are — else every
+  # run would change the working tree the stamp is keyed on.
+  printf 'log/\n' > "$d/.gitignore"
   if [ -n "$tw" ]; then printf '{"tag_prefix":"v","test_workers":%s}\n' "$tw" > "$d/rtc-ship.json"
   else printf '{"tag_prefix":"v"}\n' > "$d/rtc-ship.json"; fi
   # The stub records its argv and, for the overlap case, drops a marker pre-flight can wait for.
@@ -44,6 +47,8 @@ mkrepo() {  # mkrepo <dir> [test_workers-json-value]
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GATES_LOG/pytest.argv"
 : > "$GATES_LOG/main.started"
+# The edited-mid-run case: the suite runs while someone changes the tree under it.
+[ -n "${GATES_MUTATE:-}" ] && echo "edited during the run" >> "$GATES_MUTATE"
 echo "1 passed in 0.01s"
 STUB
   chmod +x "$d/home/.local/bin/pytest"
@@ -102,6 +107,43 @@ has "  and its output is shown, not swallowed by the background run" \
     "$(cat "$TMP/pf-red/log/out")" "venv gate red"
 stamps=$(find "$TMP/pf-red/.git/rtc-tested" -type f 2>/dev/null | wc -l | tr -d ' ')
 is "  and the tree is NOT stamped as passed" "0" "$stamps"
+
+echo "== the stamp is keyed on the WORKING tree, not HEAD =="
+# Measured 2026-10-27 (0.8.2): --test-only on a worktree with UNCOMMITTED edits printed "tree …
+# already passed every gate — skipped", because the key was HEAD^{tree} and main's earlier green
+# run had stamped it. The edits were never tested; committing them then exposed a red suite.
+runs() { [ -f "$1/log/pytest.argv" ] && wc -l < "$1/log/pytest.argv" | tr -d ' ' || echo 0; }
+stampcount() { find "$1/.git/rtc-tested" -type f 2>/dev/null | wc -l | tr -d ' '; }
+
+mkrepo "$TMP/st"
+gate "$TMP/st" >/dev/null
+# The ship path refuses a dirty tree and looks its stamp up the same way, so a CLEAN tree must
+# hash to exactly HEAD^{tree} — the stamp a --test-only run leaves is the one a ship then finds.
+is "a clean tree's stamp is named HEAD^{tree}" "$(git -C "$TMP/st" rev-parse 'HEAD^{tree}')" \
+   "$(ls "$TMP/st/.git/rtc-tested" 2>/dev/null)"
+is "a clean tree that passed is skipped on the next run (the cache still works)" \
+   "0 1" "$(gate "$TMP/st") $(runs "$TMP/st")"
+has "  and says it skipped" "$(cat "$TMP/st/log/out")" "already passed every gate"
+
+printf 'uncommitted\n' >> "$TMP/st/CHANGELOG.md"
+is "an UNCOMMITTED edit to a tracked file runs the suite again" "0 2" "$(gate "$TMP/st") $(runs "$TMP/st")"
+case "$(cat "$TMP/st/log/out")" in *"already passed"*) bad "  and does not claim a skip" "no skip line" "skipped" ;;
+  *) ok "  and does not claim a skip" ;; esac
+is "  that dirty tree's own pass is cached in turn" "0 2" "$(gate "$TMP/st") $(runs "$TMP/st")"
+
+printf 'new\n' > "$TMP/st/untracked.txt"
+is "a new UNTRACKED file runs the suite again" "0 3" "$(gate "$TMP/st") $(runs "$TMP/st")"
+is "  and hashing it left the REAL index alone: nothing staged, the new file still untracked" \
+   " M CHANGELOG.md|?? untracked.txt" "$(git -C "$TMP/st" status --porcelain | tr '\n' '|' | sed 's/|$//')"
+
+git -C "$TMP/st" checkout -q -- CHANGELOG.md; rm -f "$TMP/st/untracked.txt"
+is "back to the committed content: the original stamp applies again" "0 3" "$(gate "$TMP/st") $(runs "$TMP/st")"
+
+mkrepo "$TMP/mid"
+is "a tree edited WHILE the suite runs still reports the run" "0" \
+   "$(gate "$TMP/mid" GATES_MUTATE="$TMP/mid/CHANGELOG.md")"
+is "  but stamps NOTHING: neither the tested nor the edited tree is proven green" "0" "$(stampcount "$TMP/mid")"
+has "  and says why" "$(cat "$TMP/mid/log/out")" "changed during the run"
 
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

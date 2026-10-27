@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.3
+
+### Fixed — `--test-only` no longer skips the suites on uncommitted edits
+
+- The "already passed every gate" stamp was keyed on `HEAD^{tree}`, the COMMITTED tree. On a
+  worktree with uncommitted edits, `--test-only` matched the stamp an earlier green run of the same
+  commit had left, printed "tree … already passed every gate — skipped", and tested nothing
+  (measured 2026-10-27 on free-agents and cost-tracker: the edits ran only once committed, and
+  then exposed a red suite). The key is now the WORKING tree, hashed into a temporary index so the
+  real one is never touched: an uncommitted or untracked change runs the suites, and a dirty
+  tree's own pass is cached in turn. A clean tree still hashes to `HEAD^{tree}`, so the ship
+  path's lookup is unchanged; ignored files are not part of the key.
+- A tree edited WHILE the suites run is no longer stamped: neither the tree they started on nor
+  the one on disk is proven green. The gate still reports the result and says why it skipped the
+  stamp.
+- `tests/test_gates.sh` pins all of it (28 checks; three mutations — the HEAD key, the mid-run
+  recheck, hashing through the real index — each turn it red).
+
 ## 0.8.2
 
 ### Fixed — the suite gates: `test_workers` is read, pre-flight runs alongside the suite, and once
