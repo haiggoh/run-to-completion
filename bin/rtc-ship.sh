@@ -33,7 +33,7 @@
 # Env:
 #   RTC_MAIN            canonical checkout (default: derived from the worktree's git common dir)
 #   RTC_SKIP_TESTS=1    skip the suite gates (prefer the tree stamp: a green run of THIS tree self-skips)
-#   RTC_TEST_WORKERS    xdist workers for the main suite (default 12)
+#   RTC_TEST_WORKERS    xdist workers for the main suite (beats rtc-ship.json test_workers; default 12)
 #   RTC_SKIP_REFRESH=1  do not refresh the installed plugin after a confirmed release
 #   RTC_TAG_VISIBILITY=0        skip the published-manifest check (default: on, it gates the release)
 #   RTC_TAG_VISIBILITY_TRIES    polls before giving up (default 6; the CDN window is ~1 minute)
@@ -145,20 +145,32 @@ gates() {
     phase "tests: tree ${tree:0:10} already passed every gate ($(date -r "$stamp" '+%H:%M')) — skipped"
     return 0
   fi
+  # Worker count: env, then rtc-ship.json's test_workers, then 12. The config key was documented
+  # and never read (2026-10-27) — a SET but invalid value now aborts rather than falling through.
+  local workers src
+  if [ -n "${RTC_TEST_WORKERS:-}" ]; then workers=$RTC_TEST_WORKERS; src=RTC_TEST_WORKERS
+  else workers=$(cfg_get "test_workers" "12"); src="rtc-ship.json test_workers"; fi
+  case "$workers" in
+    ''|*[!0-9]*|0) echo "✖ $src must be a positive integer, got '$workers'" >&2; return 1 ;;
+  esac
+  d=$(mktemp -d)
+  # Pre-flight runs ALONGSIDE the main suite, not before it: its suites are the ones the main
+  # collection skips (a second venv's), so the two are disjoint, and serially every ship waited
+  # ~2 minutes for it. Its output goes to a log and is shown when it fails.
+  local pf_pid=""
   if [ -x .rtc/pre-flight.sh ]; then
-    if ./.rtc/pre-flight.sh; then phase "pre-flight gates: pass"
-    else rc=1; phase "✖ pre-flight gates FAILED"; fi
+    ./.rtc/pre-flight.sh </dev/null >"$d/pre-flight" 2>&1 &
+    pf_pid=$!
   fi
   # How this repo's tests run is the REPO'S business, not the tool's assumption. A pytest suite is
   # the default, but a repo of shell suites would otherwise collect nothing and exit 5 — so the
   # command comes from the config, and an UNCOLLECTED suite is a failure, never a silent pass.
   local test_cmd; test_cmd=$(cfg_get "test_cmd" "")
-  d=$(mktemp -d)
   if [ -n "$test_cmd" ]; then
     if bash -c "$test_cmd" >"$d/main" 2>&1; then phase "tests (config): pass"
     else phase "✖ tests (config) FAILED"; grep -E "FAIL|✖" "$d/main" | head -10 >&2; rc=1; fi
   else
-    "$HOME/.local/bin/pytest" -q tests -p no:cacheprovider -n "${RTC_TEST_WORKERS:-12}" \
+    "$HOME/.local/bin/pytest" -q tests -p no:cacheprovider -n "$workers" \
       </dev/null >"$d/main" 2>&1 &
     names+=(main); pids+=($!)
   fi
@@ -175,6 +187,10 @@ gates() {
       phase "pytest ${names[$i]}: $(grep -E 'passed|failed' "$d/${names[$i]}" | tail -1)"
     fi
   done
+  if [ -n "$pf_pid" ]; then
+    if wait "$pf_pid"; then phase "pre-flight gates: pass"
+    else rc=1; phase "✖ pre-flight gates FAILED"; tail -30 "$d/pre-flight" >&2; fi
+  fi
   if [ "$rc" = 0 ]; then mkdir -p "$(dirname "$stamp")"; touch "$stamp"; rm -rf "$d"
   else echo "✖ tests failed — full logs kept in $d" >&2; fi
   return "$rc"
@@ -239,8 +255,11 @@ fi
 # It runs AFTER the rebase and BEFORE the merge, because the bump lands between "suite green"
 # and "PR opened". This is the gate whose absence let 0.43.2 ship split.
 if ! version_gate; then echo "✖ version surfaces disagree — see above. Ship refused." >&2; exit 1; fi
-hook pre-flight || exit 1
-if [ "${RTC_SKIP_TESTS:-0}" != 1 ]; then gates || exit 1; fi
+# Pre-flight runs exactly ONCE: inside gates() (concurrently with the main suite), or on its own when
+# the suite gates are skipped. The standalone call used to be `hook pre-flight` — no `.sh`, so it
+# looked for a file that never exists and RTC_SKIP_TESTS=1 ships ran no pre-flight at all.
+if [ "${RTC_SKIP_TESTS:-0}" != 1 ]; then gates || exit 1
+else hook pre-flight.sh || exit 1; fi
 
 cd "$MAIN"
 [ "$(git branch --show-current)" = "$DEFAULT_BRANCH" ] || { echo "✖ $MAIN not on $DEFAULT_BRANCH" >&2; exit 1; }

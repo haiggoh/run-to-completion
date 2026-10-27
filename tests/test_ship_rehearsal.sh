@@ -234,5 +234,30 @@ chmod +x "$d/bin/curl"
 rc=$(cd "$d/wt" && PUBLISHED_VERSION=0.1.0 RTC_TAG_VISIBILITY_TRIES=2 RTC_TAG_VISIBILITY_DELAY=0 CALLS="$d/calls" PATH="$d/bin:$PATH" RTC_PLUGIN_CACHE="$d/cache" RTC_SKIP_TESTS=1 RTC_TAG_VISIBILITY_DELAY=0 bash "$ROOT/bin/rtc-ship.sh" "$d/wt" 0.2.0 'second' >/dev/null 2>&1; echo $?)
 is "an INVISIBLE tag fails the ship" "1" "$rc"
 
+# Pre-flight runs exactly ONCE per ship, in BOTH modes (found 2026-10-27). The standalone call was
+# `hook pre-flight` (no `.sh`), a silent no-op: a gates-skipped ship never ran pre-flight. Fixing
+# only the name would have made a GATED ship run it twice (hook, then gates()).
+counting_preflight() {  # counting_preflight <dir> — a committed pre-flight that tallies its runs
+  local d=$1
+  mkdir -p "$d/wt/.rtc"
+  printf '#!/usr/bin/env bash\necho run >> "$PF_COUNT"\n' > "$d/wt/.rtc/pre-flight.sh"
+  chmod +x "$d/wt/.rtc/pre-flight.sh"
+  ( cd "$d/wt" && git add .rtc && git -c user.email=t@t -c user.name=t commit -qm preflight )
+}
+D="$TMP/r9"; rehearse "$D"; counting_preflight "$D"
+ship_rc=$(PF_COUNT="$D/pf.count" ship "$D" 0.2.0 'second')
+is "a ship with the suite gates skipped still ships" "0" "$ship_rc"
+is "  and still runs pre-flight, once (was: never)" "1" "$(wc -l < "$D/pf.count" | tr -d ' ')"
+
+D="$TMP/r10"; rehearse "$D"; counting_preflight "$D"
+mkdir -p "$D/home/.local/bin"
+printf '#!/usr/bin/env bash\necho "1 passed in 0.01s"\n' > "$D/home/.local/bin/pytest"
+chmod +x "$D/home/.local/bin/pytest"
+rc=$(cd "$D/wt" && HOME="$D/home" PF_COUNT="$D/pf.count" CALLS="$D/calls" PATH="$D/bin:$PATH" \
+       RTC_PLUGIN_CACHE="$D/cache" RTC_TAG_VISIBILITY_DELAY=0 PUBLISHED_VERSION=0.2.0 \
+       bash "$ROOT/bin/rtc-ship.sh" "$D/wt" 0.2.0 'second' >"$D/out" 2>&1; echo $?)
+is "a GATED ship ships" "0" "$rc"
+is "  and runs pre-flight exactly once (not also as a hook)" "1" "$(wc -l < "$D/pf.count" | tr -d ' ')"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
