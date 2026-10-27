@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.1
+
+### Added — reaping gets opt-outs, and the packaging phase gets the guard it never had
+
+Two changes to `rtc-ship.sh`, one asked for, one owed:
+
+- **The post-release reaping now has opt-outs** (reaping stays the default, and every skip is
+  announced in the output, never silent): `--no-reap` for a single ship, `"reap": false` in
+  `rtc-ship.json` permanently — a non-boolean value fails the ship **before** anything
+  irreversible runs — and the pre-existing `RTC_SKIP_CLEANUP=1` environment route. The silent
+  env-var skip is gone: the loop now names which route skipped the cleanup.
+- **The version-match assertion after pre-package** (observation 0057, the free-agents
+  0.45.2/0.45.3 incident): a version-bearing asset that does not carry the release version —
+  the stale `dist/free-agents-0.44.1.tar.gz` a no-op packaging phase leaves behind — fails the
+  ship instead of being published. Version-free assets (install scripts) pass. Both new guards
+  are mutation-checked; two contract pins were re-pinned deliberately (the announced skip, and
+  the usage block now documenting two worktree-taking invocation shapes). The README now walks
+  the whole loop, the pruning rationale, and the opt-outs.
+
 ## 0.9.0
 
 ### Added — the ship loop reaps what it shipped: worktree, branches, and merged remote refs

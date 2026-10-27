@@ -17,13 +17,15 @@
 #
 # Usage:
 #   rtc-ship.sh <worktree-dir> <version> "<release title summary>"
+#   rtc-ship.sh <worktree-dir> <version> "<title>" --no-reap   keep worktree and branches, this ship only
 #   rtc-ship.sh --test-only <worktree-dir>    run the gates and stamp the tree, ship nothing
 #   rtc-ship.sh --which-config                print the config this repo would use and exit
 #   rtc-ship.sh --help
 #
 # Per-repo specifics live in TWO places, both inside the repo being shipped:
 #   rtc-ship.json   DATA the tool needs: the tag prefix, which version surfaces to check, release
-#                   asset globs, the plugin to refresh, test worker count.
+#                   asset globs, the plugin to refresh, test worker count, and "reap": false to
+#                   permanently keep worktrees and merged branches (reaping is the default).
 #   .rtc/*.sh       COMMANDS only that repo has, run at named points if present and executable:
 #                     pre-flight.sh     extra gates, before anything else (a second venv's suite)
 #                     pre-package.sh    build the release assets
@@ -39,6 +41,8 @@
 #   RTC_TAG_VISIBILITY_TRIES    polls before giving up (default 6; the CDN window is ~1 minute)
 #   RTC_TAG_VISIBILITY_DELAY    seconds between polls (default 20)
 #   RTC_SKIP_CLEANUP=1  keep the shipped worktree and every branch after a confirmed release
+#                       (opt-outs for cleanup, reaping being the default: this env var, the
+#                       transient --no-reap flag, or "reap": false in rtc-ship.json permanently)
 #   RTC_BACKUP_DIR      where uncommitted files are backed up before their worktree is reaped
 #                       (default $HOME/.claude/backups/worktrees)
 set -euo pipefail
@@ -377,6 +381,20 @@ cleanup() {  # after a CONFIRMED release: reap the shipped worktree, its branch,
   return 0
 }
 
+# --no-reap may appear in ANY position: pull it out before the dispatch so the flag composes
+# with every invocation shape. Transient only — it skips cleanup for THIS ship; the permanent
+# opt-out is rtc-ship.json's "reap": false, and the environment's RTC_SKIP_CLEANUP=1 (which
+# predates the flag and which scripts already set) still applies on its own.
+no_reap_seen=0
+args=()
+for a in "$@"; do
+  case $a in
+    --no-reap) no_reap_seen=1 ;;
+    *) args+=("$a") ;;
+  esac
+done
+set -- ${args[@]+"${args[@]}"}
+
 case "${1:-}" in
   -h|--help) usage; exit 0 ;;
   "") usage >&2; exit 2 ;;
@@ -414,6 +432,16 @@ BR=$(git branch --show-current)
 TOP=$(git rev-parse --show-toplevel)
 MAIN=${RTC_MAIN:-$(git rev-parse --git-common-dir | sed 's#/.git$##')}
 PREFIX=$(cfg_get "tag_prefix" "")
+# The reaping opt-out is validated HERE, before anything irreversible runs: a typo'd value
+# ("flase") must abort the ship at the door — after the tag is pushed is far too late to learn
+# the config was never read. Reaping is the default; the routes are --no-reap (transient),
+# "reap": false in rtc-ship.json (permanent), RTC_SKIP_CLEANUP=1 (environment).
+REAP=$(cfg_get "reap" 1)
+case "$REAP" in
+  1|0) : ;;
+  *) echo "✖ rtc-ship.json: \"reap\": '$REAP' is not a boolean (use true or false) — fix the config" >&2
+     exit 2 ;;
+esac
 # The default branch is NOT assumed. Config first (echoprism uses `master`), then the remote's own
 # HEAD, and only then `main` — a hardcoded `main` would mis-ship a whole repo.
 DEFAULT_BRANCH=$(cfg_get "default_branch" "")
@@ -541,6 +569,27 @@ if [ "${#MISSING[@]}" -gt 0 ]; then
   echo "  the release would ship without them — fix the packaging hook or the glob" >&2
   exit 1
 fi
+# obs 0057 — a version-bearing asset that does not carry THIS release's version is a stale
+# build: pre-package's output was never asserted, so a previous release's tarball left in dist/
+# satisfied the glob and free-agents 0.45.2/0.45.3 shipped against dist/free-agents-0.44.1.tar.gz
+# (packaging had built nothing current). The rehearsal replays exactly that. Version-free assets
+# (an install script keeps its name across releases) cannot carry a version and pass. FAIL, do
+# not warn — a gate that reports a mismatch and exits 0 trains the operator to believe the green.
+ver_re='-([0-9]+)(\.[0-9]+)+'
+if [ "${#ASSETS[@]}" -gt 0 ]; then
+  for a in "${ASSETS[@]}"; do
+    [ -f "$a" ] || continue
+    b=$(basename "$a")
+    if [[ $b =~ $ver_re ]]; then
+      tok=${BASH_REMATCH[0]#-}
+      if [ "$tok" != "$V" ]; then
+        echo "✖ asset $b carries version $tok, not the release version $V — the build in $TOP is stale" >&2
+        echo "  re-run (or fix) .rtc/pre-package.sh so dist/ holds THIS release's assets" >&2
+        exit 1
+      fi
+    fi
+  done
+fi
 if [ -n "$notes" ]; then
   nf=$(mktemp); printf '%s\n' "$notes" > "$nf"
   gh release create "${PREFIX}${V}" --title "$(basename "$MAIN") $V — $TITLE" \
@@ -602,7 +651,20 @@ fi
 # The release is confirmed live. What happens to the branch that carried it is now safe to decide —
 # and deciding it HERE is the point: the step every hand-rolled ship forgot is the one that lives
 # inside the loop. A cleanup failure never fails a confirmed release; the release outranks the tidy.
-if [ "${RTC_SKIP_CLEANUP:-0}" != 1 ]; then
+# Three opt-out routes, reaping being the default. A skip is ANNOUNCED, never silent — a tool
+# that quietly stops tidying looks broken from its own output (no-hidden-changes: the tool's
+# own output must show the state it is in).
+skip_reasons=""
+if [ "$no_reap_seen" = 1 ]; then skip_reasons="--no-reap"; fi
+if [ "$REAP" = 0 ]; then
+  skip_reasons="${skip_reasons:+$skip_reasons, }reap:false in rtc-ship.json"
+fi
+if [ "${RTC_SKIP_CLEANUP:-0}" = 1 ]; then
+  skip_reasons="${skip_reasons:+$skip_reasons, }RTC_SKIP_CLEANUP=1"
+fi
+if [ -n "$skip_reasons" ]; then
+  phase "cleanup: skipped ($skip_reasons) — the worktree, its branch and merged branches are kept"
+else
   cleanup || echo "⚠ cleanup failed; the release itself is done" >&2
 fi
 phase "done — ${PREFIX}${V} is live"

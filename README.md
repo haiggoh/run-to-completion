@@ -195,9 +195,18 @@ MIT © Heiko Brantsch
 ## Shipping a release: `bin/rtc-ship.sh`
 
     rtc-ship.sh <worktree> <version> "<title>"     the full ship loop
+    rtc-ship.sh <worktree> <version> "<title>" --no-reap    same, but keep the worktree and branches
     rtc-ship.sh --test-only <worktree>            gates only, ship nothing
     rtc-ship.sh --versions-only <worktree>        the version gate alone (fast, pre-commit)
     rtc-ship.sh --which-config                    the config this repo uses
+
+The loop runs eight phases in a fixed order: **gates** (the repo's suite plus
+`.rtc/pre-flight.sh`, with the version surfaces checked in lockstep) → **rebase** on
+`origin/<default-branch>` → **merge** (fast-forward) → **tag** (annotated; title and notes from
+the top `CHANGELOG.md` entry) → **visibility** (the published manifest must already declare the
+new version — a pushed tag is not yet a released one) → **release** (with the packaged assets) →
+**installed-copy refresh** (read back and verified) → **cleanup** (reap what shipped — see
+below).
 
 The gates cannot be skipped by forgetting to run a script — they are *in* it, and the version gate
 runs after the rebase and **before the merge**, which is the only place it is still meaningful: the
@@ -207,7 +216,8 @@ and "PR opened", and only a re-check catches it.
 A repo configures the tool with two things, both inside the repo and both committed:
 
 - **`rtc-ship.json`** — data: `tag_prefix` (`v` on most of our repos), which version surfaces
-  exist (`version_file`, `roadmap`), asset globs, the plugin to refresh, and `default_branch`.
+  exist (`version_file`, `roadmap`), asset globs, the plugin to refresh, `default_branch`, and
+  `reap` (set `false` to permanently skip the post-release cleanup — see below).
 - **`.rtc/{pre-flight,pre-package,post-release}.sh`** — commands only that repo has. **Opt-in by
   presence**: a repo with no `.rtc/` directory is fully supported.
 
@@ -239,7 +249,20 @@ After the release is confirmed live, the loop **reaps what it shipped**: the wor
 are removed (locally *and* on the remote), every other local branch already contained in the default
 branch is deleted — except one a worktree still has checked out, because a concurrent session may be
 standing in it — and the same set of remote-tracking refs is pushed away, since `git fetch --prune`
-cannot clean a branch that was never deleted there. `RTC_SKIP_CLEANUP=1` keeps everything.
+cannot clean a branch that was never deleted there.
+
+Pruning merged branches is good practice beyond tidiness: a merged branch is a dead name that
+still looks alive, every `git branch` listing grows noisier, and a stale name gets mistaken for
+work in progress — measured here, two fully-merged, tagged, shipped worktrees (`fa-wt-config`,
+`rtc-wt-glob`) sat unreaped for weeks because no tool was willing to remove them.
+
+Reaping is the **default**, and any one of three opt-outs skips the whole cleanup step — always
+**announced in the output**, never silently:
+
+- `--no-reap` — transient: keep the worktree and branches for **this ship only**;
+- `"reap": false` in `rtc-ship.json` — permanent, committed with the repo (a value that is not
+  a boolean fails the ship **before** anything irreversible runs);
+- `RTC_SKIP_CLEANUP=1` — the environment route, for scripted invocations.
 
 Nothing is lost to a judgement call. What may be reaped without a backup is decided in
 `cleanup_extra()`, and its rules are harmonised with watch-your-step's `worktree remove` guard —

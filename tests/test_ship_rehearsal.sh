@@ -190,6 +190,28 @@ is "a stale build in the canonical checkout does not fail the ship" "0" "$(ship 
 has "gh gets the WORKTREE's asset by absolute path" "$(cat "$D/calls")" "$D/wt/dist/rehearsal-0.2.0.tar.gz"
 is "and never the canonical checkout's stale build" "0" "$(grep -c 'rehearsal-0.1.0' "$D/calls")"
 
+# obs 0057: a pre-package phase whose output nobody asserts. The scratch pre-package here is a
+# silent no-op — it runs green and builds nothing — and the worktree's dist/ still holds the
+# PREVIOUS release's tarball, which satisfies the glob. The ship must FAIL naming the stale
+# asset instead of publishing it (measured on free-agents 0.45.2/0.45.3, which glob-matched
+# dist/free-agents-0.44.1.tar.gz while packaging had built nothing current).
+D="$TMP/r4c"; rehearse "$D"
+python3 - "$D/wt/rtc-ship.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p)); d["assets"] = "dist/rehearsal-*.tar.gz"
+open(p, "w").write(json.dumps(d, indent=2) + "\n")
+PY
+mkdir -p "$D/wt/.rtc"
+mv "$D/wt/dist/rehearsal-0.2.0.tar.gz" "$D/wt/dist/rehearsal-0.1.0.tar.gz"
+printf '#!/usr/bin/env bash\n# the silent no-op: runs green, builds nothing\nexit 0\n' > "$D/wt/.rtc/pre-package.sh"
+chmod +x "$D/wt/.rtc/pre-package.sh"
+( cd "$D/wt" && git add -A && git commit -qm 'stale dist asset, no-op pre-package' )
+rc=$(ship "$D" 0.2.0 'second')
+is "a stale version-bearing asset FAILS the ship" "1" "$rc"
+has "and names the stale asset" "$(cat "$D/out")" "rehearsal-0.1.0"
+is "and the release was NOT published" "0" "$(grep -c 'release published' "$D/out")"
+
 # ---------------------------------------------------------------------------------------------
 # The refresh must be VERIFIED, not just invoked. `get-haiggoh` exits 0 having copied nothing when
 # the manifest it reads is still the old version (a raw.githubusercontent.com propagation window,
@@ -307,7 +329,8 @@ is "RTC_SKIP_CLEANUP=1 keeps the worktree" "0" "$(ship_c "$D" RTC_SKIP_CLEANUP=1
 is "  and the branch" "feat/ship" "$(branches "$D/main" | grep -x feat/ship || echo '')"
 is "  and the remote ref" "feat/ship" \
    "$(git -C "$D/origin.git" for-each-ref --format='%(refname:short)' refs/heads | grep -x feat/ship || echo '')"
-is "  and runs no cleanup at all" "0" "$(grep -c 'cleanup:' "$D/out")"
+is "  and the skip is announced, naming the route" "1" \
+   "$(grep -c 'cleanup: skipped (RTC_SKIP_CLEANUP=1)' "$D/out")"
 
 # A merged branch that ANOTHER worktree still has checked out must survive both sweeps: a
 # concurrent session may be standing in it. This is the guard that makes the routine safe to run
@@ -429,6 +452,51 @@ is "  while the merged topic branch IS swept" "" \
    "$(git -C "$D/origin.git" for-each-ref --format='%(refname:short)' refs/heads | grep -x topic || echo '')"
 is "  and the unmerged branch origin/HEAD points at is left alone" "trunk" \
    "$(git -C "$D/origin.git" for-each-ref --format='%(refname:short)' refs/heads | grep -x trunk || echo '')"
+
+# The opt-outs. Reaping is the default (every u-test above runs with it on); the user may skip
+# it for ONE ship (--no-reap, transient), permanently ("reap": false in rtc-ship.json), or via
+# the pre-existing environment route (RTC_SKIP_CLEANUP=1). A skip is ANNOUNCED, never silent:
+# a tool that quietly stops tidying looks broken from its own output.
+D="$TMP/u12"; rehearse "$D"
+( cd "$D/main" && git branch topic/merged )
+is "the default ship reaps (baseline for the opt-outs)" "0" "$(ship_c "$D")"
+is "  the merged branch is gone" "" "$(branches "$D/main" | grep -x 'topic/merged' || echo '')"
+
+D="$TMP/u13"; rehearse "$D"
+( cd "$D/main" && git branch topic/merged )
+rc=$(ship "$D" 0.2.0 'second' --no-reap)
+is "--no-reap ships" "0" "$rc"
+is "  and the merged branch SURVIVES" "topic/merged" "$(branches "$D/main" | grep -x 'topic/merged' || echo '')"
+is "  and the shipped worktree survives" "0" "$([ -d "$D/wt" ] && echo 0 || echo 1)"
+has "  and the skip is announced" "$(cat "$D/out")" "cleanup: skipped (--no-reap)"
+
+D="$TMP/u14"; rehearse "$D"
+( cd "$D/main" && git branch topic/merged )
+python3 - "$D/wt/rtc-ship.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p)); d["reap"] = False
+open(p, "w").write(json.dumps(d, indent=2) + "\n")
+PY
+( cd "$D/wt" && git add -A && git commit -qm 'opt out of reaping' )
+rc=$(ship_c "$D")
+is "a config reap:false ships" "0" "$rc"
+is "  and the merged branch SURVIVES" "topic/merged" "$(branches "$D/main" | grep -x 'topic/merged' || echo '')"
+is "  and the shipped worktree survives" "0" "$([ -d "$D/wt" ] && echo 0 || echo 1)"
+has "  and the skip names the config route" "$(cat "$D/out")" "reap"
+
+D="$TMP/u15"; rehearse "$D"
+python3 - "$D/wt/rtc-ship.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p)); d["reap"] = "flase"
+open(p, "w").write(json.dumps(d, indent=2) + "\n")
+PY
+( cd "$D/wt" && git add -A && git commit -qm 'typo the opt-out' )
+rc=$(ship_c "$D")
+is "a NON-boolean reap value fails the ship BEFORE any irreversible step" "2" "$rc"
+has "  naming the bad value" "$(cat "$D/out")" "flase"
+is "  and nothing was published" "0" "$(grep -c 'release published' "$D/out")"
 
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

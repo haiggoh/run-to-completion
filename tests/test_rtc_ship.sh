@@ -22,7 +22,9 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 before=$(md5 -q "$ROOT/CHANGELOG.md" 2>/dev/null || echo x)
 "$ROOT/bin/rtc-ship.sh" --help >"$TMP/help" 2>&1
 is "--help exits 0" "$?" "0"
-is "--help prints a usage block" "$(grep -c 'rtc-ship.sh <worktree-dir>' "$TMP/help")" "1"
+# Exactly the worktree-taking invocation shapes: the plain one and the --no-reap variant.
+# A new flag that takes <worktree-dir> must be added here, or this count goes red on purpose.
+is "--help prints a usage block" "$(grep -c 'rtc-ship.sh <worktree-dir>' "$TMP/help")" "2"
 
 # --help must document EVERYTHING the script reads. `usage()` used to print a hardcoded line range,
 # so any env var added past line 31 was live and invisible — 0.6.11 shipped its tag-visibility gate
