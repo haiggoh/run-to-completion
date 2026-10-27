@@ -96,8 +96,12 @@ STUB
 
 ship() {  # ship <dir> [extra rtc-ship args...] — run the loop with the stubs on PATH
   local d=$1; shift
+  # RTC_BACKUP_DIR is pinned to the scratch tree in EVERY ship, not just the cleanup tests: the
+  # loop now reaps the shipped worktree, and a rehearsal that wrote a backup into the real
+  # $HOME/.claude/backups would be wrecking the machine it runs on.
   ( cd "$d/wt" && CALLS="$d/calls" PATH="$d/bin:$PATH" RTC_SKIP_TESTS=1 \
-      RTC_PLUGIN_CACHE="$d/cache" RTC_TAG_VISIBILITY_DELAY=0 PUBLISHED_VERSION=0.2.0 \
+      RTC_PLUGIN_CACHE="$d/cache" RTC_BACKUP_DIR="$TMP/bk" RTC_TAG_VISIBILITY_DELAY=0 \
+      PUBLISHED_VERSION=0.2.0 \
       "$ROOT/bin/rtc-ship.sh" "$d/wt" "$@" ) >"$d/out" 2>&1
   echo $?
 }
@@ -258,6 +262,173 @@ rc=$(cd "$D/wt" && HOME="$D/home" PF_COUNT="$D/pf.count" CALLS="$D/calls" PATH="
        bash "$ROOT/bin/rtc-ship.sh" "$D/wt" 0.2.0 'second' >"$D/out" 2>&1; echo $?)
 is "a GATED ship ships" "0" "$rc"
 is "  and runs pre-flight exactly once (not also as a hook)" "1" "$(wc -l < "$D/pf.count" | tr -d ' ')"
+
+# ---------------------------------------------------------------------------------------------
+# Cleanup after a CONFIRMED release. The CHANGELOG has advertised this step since 0.7.0; the
+# generalization from fa-ship.sh dropped it, which is exactly why fa-wt-config and rtc-wt-glob
+# sat there fully merged, tagged and shipped, never reaped. The rules are harmonised with
+# watch-your-step's worktree-remove guard (same taxonomy, same component-not-substring matching,
+# same collapsed-dir inspection) but deliberately NOT coupled to it: this is the AUTOMATIC path
+# and must decide correctly with or without that plugin installed.
+# ---------------------------------------------------------------------------------------------
+ship_c() {  # ship_c <dir> [VAR=val ...] — a ship with cleanup on and backups contained in $TMP
+  local d=$1; shift
+  rm -rf "$TMP/bk"          # one test's rescue must not be read by the next one's assertion
+  # `env`, not an assignment prefix: a bare "$@" anywhere in the prefix makes bash treat every
+  # VAR=val AFTER it as a COMMAND word (exit 127, "command not found"), so the extra
+  # RTC_SKIP_CLEANUP-style overrides could never be spliced in that way.
+  ( cd "$d/wt" && env CALLS="$d/calls" PATH="$d/bin:$PATH" RTC_SKIP_TESTS=1 \
+      RTC_PLUGIN_CACHE="$d/cache" RTC_BACKUP_DIR="$TMP/bk" RTC_TAG_VISIBILITY_DELAY=0 \
+      PUBLISHED_VERSION=0.2.0 "$@" bash "$ROOT/bin/rtc-ship.sh" "$d/wt" 0.2.0 'second' ) >"$d/out" 2>&1
+  echo $?
+}
+# `git branch --list` prefixes `+` (held by a worktree) and `*` (current), so a surviving branch
+# asserts as "+ feat/ship". Read refs instead of the decorated list.
+branches() { git -C "$1" for-each-ref --format='%(refname:short)' refs/heads; }
+# What was rescued, relative to the backup root — the timestamped directory is part of the path
+# and is not the fact under test.
+bk() { find "$TMP/bk" -type f 2>/dev/null | sed "s|^$TMP/bk/[^/]*/||" | sort; }
+
+D="$TMP/u1"; rehearse "$D"
+( cd "$D/wt" && git push -q origin feat/ship )      # the topic branch reached the remote too
+is "a confirmed release reaps the shipped worktree" "0" "$(ship_c "$D")"
+is "  the worktree directory is gone" "" "$([ -d "$D/wt" ] && echo present || echo '')"
+is "  the branch is gone locally" "" "$(git -C "$D/main" branch --list feat/ship)"
+is "  the MERGED REMOTE ref is gone too" "" \
+   "$(git -C "$D/origin.git" for-each-ref --format='%(refname:short)' refs/heads | grep -x feat/ship || echo '')"
+has "  and each step is reported" "$(cat "$D/out")" "cleanup: removed worktree"
+has "  including the remote deletion" "$(cat "$D/out")" "cleanup: deleted origin/feat/ship"
+is "  and the release still reports live" "1" "$(grep -c 'is live' "$D/out")"
+is "  with nothing precious, no backup is taken" "0" "$(bk | wc -l | tr -d ' ')"
+
+D="$TMP/u2"; rehearse "$D"
+( cd "$D/wt" && git push -q origin feat/ship )
+is "RTC_SKIP_CLEANUP=1 keeps the worktree" "0" "$(ship_c "$D" RTC_SKIP_CLEANUP=1)"
+is "  and the branch" "feat/ship" "$(branches "$D/main" | grep -x feat/ship || echo '')"
+is "  and the remote ref" "feat/ship" \
+   "$(git -C "$D/origin.git" for-each-ref --format='%(refname:short)' refs/heads | grep -x feat/ship || echo '')"
+is "  and runs no cleanup at all" "0" "$(grep -c 'cleanup:' "$D/out")"
+
+# A merged branch that ANOTHER worktree still has checked out must survive both sweeps: a
+# concurrent session may be standing in it. This is the guard that makes the routine safe to run
+# unattended, and it is tested by planting exactly that worktree.
+D="$TMP/u3"; rehearse "$D"
+( cd "$D/main" && git branch other/merged && git push -q origin other/merged \
+    && git worktree add -q "$D/wt2" other/merged )
+is "a merged branch held by ANOTHER worktree survives" "0" "$(ship_c "$D")"
+is "  locally" "other/merged" "$(branches "$D/main" | grep -x other/merged || echo '')"
+is "  and on the remote" "other/merged" \
+   "$(git -C "$D/origin.git" for-each-ref --format='%(refname:short)' refs/heads | grep -x other/merged || echo '')"
+is "  and its worktree survives" "0" "$([ -d "$D/wt2" ] && echo 0 || echo 1)"
+is "  and the default branch is never swept locally" "main" "$(branches "$D/main" | grep -x main || echo '')"
+# Pinned separately from the local one: `git branch -d` already refuses to delete a checked-out or
+# current branch, so the LOCAL skip is belt-and-braces and deleting it from the script changes
+# nothing observable. The REMOTE skip is the load-bearing one — `git push origin --delete` knows
+# nothing about local worktrees or the default branch, so removing it really does delete origin/main.
+is "  and never the default branch on the remote either" "main" \
+   "$(git -C "$D/origin.git" for-each-ref --format='%(refname:short)' refs/heads | grep -x main || echo '')"
+
+# HALF ONE of the trap: git collapses a wholly-ignored directory to 'sub/', so the name cannot tell
+# a Finder-junk directory from a real one. Inspecting it is the whole rule.
+D="$TMP/u4"; rehearse "$D"
+( cd "$D/wt" && mkdir -p sub && echo finder > sub/.DS_Store \
+    && printf 'sub/\n' >> .gitignore \
+    && git add .gitignore && git -c user.email=t@t -c user.name=t commit -qm 'ignore sub' )
+is "a .DS_Store-only ignored dir is noise" "0" "$(ship_c "$D")"
+is "  so no backup is taken" "0" "$(bk | wc -l | tr -d ' ')"
+
+# HALF TWO: the same collapsed shape holding junk AND the only copy of something real.
+D="$TMP/u5"; rehearse "$D"
+( cd "$D/wt" && mkdir -p sub && echo finder > sub/.DS_Store && echo 'the only copy' > sub/ledger.md \
+    && printf 'sub/\n' >> .gitignore \
+    && git add .gitignore && git -c user.email=t@t -c user.name=t commit -qm 'ignore sub' )
+is "a collapsed dir holding junk AND a real file is NOT noise" "0" "$(ship_c "$D")"
+is "  so the real file is rescued" "sub/ledger.md" "$(bk | grep -x 'sub/ledger.md' || echo '')"
+has "  and the rescue is reported" "$(cat "$D/out")" "backed up"
+
+# A DIRECTORY component excuses a path; a substring would excuse its neighbours too. 'myvenv/plan.md'
+# is a ledger, not a virtualenv — the second half of the same trap.
+D="$TMP/u6"; rehearse "$D"
+( cd "$D/wt" && mkdir -p myvenv venv && echo plan > myvenv/plan.md && echo x > venv/marker \
+    && printf 'myvenv/\nvenv/\n' >> .gitignore \
+    && git add .gitignore && git -c user.email=t@t -c user.name=t commit -qm ignore )
+is "the component rule rescues myvenv/plan.md" "0" "$(ship_c "$D")"
+is "  and it is backed up" "myvenv/plan.md" "$(bk | grep -x 'myvenv/plan.md' || echo '')"
+is "  while venv/marker is cache and is not backed up" "0" "$(bk | grep -c 'venv/marker')"
+
+# The generalized config.local.sh rule: an ignored file the canonical checkout already holds,
+# byte for byte, is not information this worktree alone has.
+D="$TMP/u7"; rehearse "$D"
+( cd "$D/wt" && mkdir -p config && echo same > config/config.local.sh \
+    && printf 'config/config.local.sh\n' >> .gitignore \
+    && git add .gitignore && git -c user.email=t@t -c user.name=t commit -qm ignore )
+mkdir -p "$D/main/config" && echo same > "$D/main/config/config.local.sh"
+is "an ignored file IDENTICAL to the canonical copy is not precious" "0" "$(ship_c "$D")"
+is "  so no backup is taken" "0" "$(bk | wc -l | tr -d ' ')"
+
+D="$TMP/u8"; rehearse "$D"
+( cd "$D/wt" && mkdir -p config && echo 'worktree copy, edited' > config/config.local.sh \
+    && printf 'config/config.local.sh\n' >> .gitignore \
+    && git add .gitignore && git -c user.email=t@t -c user.name=t commit -qm ignore )
+mkdir -p "$D/main/config" && echo 'canonical copy differs' > "$D/main/config/config.local.sh"
+is "a DIFFERING ignored copy IS precious" "0" "$(ship_c "$D")"
+is "  and is backed up" "config/config.local.sh" "$(bk | grep -x 'config/config.local.sh' || echo '')"
+
+# An unmerged worktree is kept, and says why — never removed silently.
+D="$TMP/u9"; rehearse "$D"
+( cd "$D/main" && git worktree add -q "$D/wt2" -b feat/unmerged )
+( cd "$D/wt2" && echo nope > nope.txt && git add -A && git -c user.email=t@t -c user.name=t commit -qm unmerged )
+is "an unmerged foreign worktree is kept" "0" "$(ship_c "$D")"
+is "  its directory survives" "0" "$([ -d "$D/wt2" ] && echo 0 || echo 1)"
+is "  and its branch survives" "feat/unmerged" "$(branches "$D/main" | grep -x feat/unmerged || echo '')"
+# NOT asserted here: the "kept, and says why" branch belongs to the SHIPPED worktree, and the ship
+# loop has always merged it into the default branch by the time cleanup runs — so that message is a
+# backstop for a state this harness cannot construct, not a covered path. The foreign-worktree
+# assertions above are what the rehearsal can prove.
+
+# Shipping the canonical checkout itself must reap nothing: that tree is what every other worktree
+# is measured against, so deleting it would take the repo's only clean copy with it. RTC_MAIN is
+# pinned because the derivation `git rev-parse --git-common-dir | sed 's#/.git$##'` returns a
+# RELATIVE path when $WT is the primary checkout (pre-existing, unrelated to cleanup), which would
+# fail the ship before the guard is ever reached.
+D="$TMP/u10"; rehearse "$D"; fake_cache "$D" 0.1.0
+rc=$( cd "$D/main" && CALLS="$D/calls" PATH="$D/bin:$PATH" RTC_SKIP_TESTS=1 \
+      RTC_SKIP_REFRESH=1 RTC_MAIN="$D/main" RTC_BACKUP_DIR="$TMP/bk" RTC_TAG_VISIBILITY_DELAY=0 \
+      PUBLISHED_VERSION=0.1.0 bash "$ROOT/bin/rtc-ship.sh" "$D/main" 0.1.0 'canonical' >"$D/out" 2>&1; echo $? )
+is "shipping the canonical checkout ships" "0" "$rc"
+is "  and does NOT remove it" "0" "$([ -d "$D/main" ] && echo 0 || echo 1)"
+is "  and reports why it was not touched" "1" "$(grep -c 'canonical checkout' "$D/out")"
+
+# What this case actually proves, and what it does NOT. Measured 2026-10-27 by deleting each
+# safeguard from the script in turn: git refuses to delete a branch that is checked out, and refuses
+# to delete the branch a remote's HEAD points at, so both `$DEFAULT_BRANCH` skips are unreachable
+# during a real ship — the ship has already required $MAIN to be on $DEFAULT_BRANCH, which puts the
+# default branch in `in_wt` and therefore behind the in_wt test. This test pins the OUTCOME (the
+# default branch survives even when origin/HEAD points somewhere else, which is the echoprism
+# `master` shape and the case where git's own protection stops applying), not either skip line.
+# Deleting the remote skip leaves this test green — that is a true negative, documented in the
+# script, not a gap in this test.
+D="$TMP/u11"; rehearse "$D"
+( cd "$D/main" || exit 1
+  # origin/HEAD must point at a branch that is (a) NOT the default branch this repo's config names,
+  # and (b) deliberately UNMERGED, so the sweep never reaches it. Both matter: if it pointed at a
+  # merged branch, `git push --delete` would refuse it as the remote's current branch and the
+  # "the sweep still sweeps" assertion could never pass.
+  git checkout -q -b trunk
+  echo unreleasable > unreleasable.txt
+  git add -A && git -c user.email=t@t -c user.name=t commit -qm unreleasable
+  git push -q origin trunk
+  git checkout -q main
+  git -C "$D/origin.git" symbolic-ref HEAD refs/heads/trunk
+  # a MERGED topic branch, to prove the sweep still sweeps when it should
+  git branch topic && git push -q origin topic )
+is "a config-named default branch survives when origin/HEAD points elsewhere" "0" "$(ship_c "$D")"
+is "  origin/main is NOT deleted" "main" \
+   "$(git -C "$D/origin.git" for-each-ref --format='%(refname:short)' refs/heads | grep -x main || echo '')"
+is "  while the merged topic branch IS swept" "" \
+   "$(git -C "$D/origin.git" for-each-ref --format='%(refname:short)' refs/heads | grep -x topic || echo '')"
+is "  and the unmerged branch origin/HEAD points at is left alone" "trunk" \
+   "$(git -C "$D/origin.git" for-each-ref --format='%(refname:short)' refs/heads | grep -x trunk || echo '')"
 
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

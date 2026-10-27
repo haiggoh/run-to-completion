@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.9.0
+
+### Added — the ship loop reaps what it shipped: worktree, branches, and merged remote refs
+
+`rtc-ship.sh` now ends with the step its own CHANGELOG has advertised since 0.7.0 — *"ff-merge into
+main, an annotated tag from the CHANGELOG entry, push, release with the repo's assets,
+installed-copy refresh, **worktree cleanup**"* — but which the generalization from `fa-ship.sh`
+never carried. **The cleanup was dropped, and every repo except free-agents has shipped without it
+since.** That gap is why two fully-merged, tagged and published worktrees (`fa-wt-config` in
+free-agents, `rtc-wt-glob` here) sat unreaped for weeks with no tool willing to remove them. The
+0.7.0 entry is left exactly as written; this entry is the correction, not a rewrite.
+
+After a **confirmed** release the loop:
+
+- removes the shipped worktree and deletes its branch, locally **and on the remote**;
+- sweeps every other local branch already contained in the default branch, except one a worktree
+  still has checked out — a concurrent session may be standing in it;
+- sweeps the same set of remote-tracking refs, because `git fetch --prune` cannot clean a branch
+  that was never deleted there;
+- backs up every uncommitted file that would be lost to a timestamped directory before removing
+  the worktree — a removed worktree once took an uncommitted handover with it;
+- keeps an unmerged, dirty, or canonical-checkout tree, and says why.
+
+**Nothing is lost to a judgement call.** What may be reaped without a backup is decided by
+`cleanup_extra()`, whose rules are harmonised with watch-your-step's `worktree remove` guard —
+deliberately **duplicated rather than shared**, because the two repos have no dependency on each
+other and this is the *automatic* path: an auto-reaper leaning on a guard written for manual
+commands is safe only while that guard happens to be installed.
+
+- `.DS_Store` and `*.pyc` are noise anywhere;
+- a path is excused by a **directory component**, never a substring — `venv/x` is cache, but
+  `myvenv/plan.md` is a ledger, and a substring rule would have thrown the ledger away;
+- a directory git **collapsed** because everything in it is ignored (`!! sub/`) is *inspected*, never
+  judged by its name, since the name cannot separate a Finder-junk directory from one holding the
+  only copy of something;
+- an ignored file **byte-identical** to the same path in the canonical checkout is not information
+  this worktree alone holds — this generalises `fa-ship.sh`'s hardcoded `config/config.local.sh`
+  special case, which had to be dropped on porting rather than baked into a general tool;
+- anything else is backed up first.
+
+`RTC_SKIP_CLEANUP=1` keeps everything; `RTC_BACKUP_DIR` moves the backups. A cleanup failure never
+fails a confirmed release — the release outranks the tidy.
+
+`tests/test_ship_rehearsal.sh` grows from 32 to 72 checks. Eight mutations — each safeguard removed
+or degraded in turn — establish which ones actually carry weight:
+
+- **pinned:** the remote-sweep worktree guard, `cleanup_extra` answering "nothing precious", the
+  substring-degraded component match, a removed collapsed-dir inspection, and the
+  canonical-checkout guard;
+- **expected-not-pinned, and documented as such in the script:** the two `$DEFAULT_BRANCH` skips and
+  the local-sweep worktree guard. Git refuses these deletions first — `git branch -d` will not
+  delete a checked-out branch, and the default branch is *always* checked out, because the ship has
+  already required `$MAIN` to be on it. They are kept as belt-and-braces; they are not claimed as
+  covered.
+
+That last group is itself a finding: a safeguard nobody can observe failing is indistinguishable
+from one that is working, which is how the 0.7.0 drift survived at all.
+
 ## 0.8.3
 
 ### Fixed — `--test-only` no longer skips the suites on uncommitted edits

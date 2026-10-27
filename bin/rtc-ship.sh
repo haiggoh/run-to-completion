@@ -38,6 +38,9 @@
 #   RTC_TAG_VISIBILITY=0        skip the published-manifest check (default: on, it gates the release)
 #   RTC_TAG_VISIBILITY_TRIES    polls before giving up (default 6; the CDN window is ~1 minute)
 #   RTC_TAG_VISIBILITY_DELAY    seconds between polls (default 20)
+#   RTC_SKIP_CLEANUP=1  keep the shipped worktree and every branch after a confirmed release
+#   RTC_BACKUP_DIR      where uncommitted files are backed up before their worktree is reaped
+#                       (default $HOME/.claude/backups/worktrees)
 set -euo pipefail
 
 # Print every header comment line up to the first line of real code. NOT a hardcoded line range:
@@ -221,6 +224,156 @@ hook() {  # hook <name> — run a repo hook if it is present and executable
     if "./.rtc/$name"; then phase "hook $name: pass"; return 0
     else phase "✖ hook $name FAILED"; return 1; fi
   fi
+  return 0
+}
+
+# --- what a worktree may be reaped without losing anything -----------------------------------
+# Harmonised with watch-your-step's worktree-remove guard (bin/watch-your-step.py on branch
+# fix/block-worktree-remove-ignored: CACHE_DIRS, _is_cache_path, _dir_is_all_cache). The general
+# rules are deliberately DUPLICATED rather than shared: these two repos have no dependency on each
+# other, and this routine is the AUTOMATIC one. A reaper that leans on a guard written for manual
+# commands has its safety installed by luck — it would be safe only while watch-your-step happens
+# to be installed. So this decides on its own, and the shared rules are pinned by the tests below.
+#   - .DS_Store and *.pyc are noise anywhere;
+#   - a path is excused by a DIRECTORY component: `venv/x` is cache, `myvenv/plan.md` is NOT — a
+#     substring match would excuse `myvenv/` too, which is exactly the second half of the trap;
+#   - git COLLAPSES a wholly-ignored directory to `sub/`, so the name alone cannot separate a
+#     Finder-junk directory from a ledger holding the only copy of something. A collapsed dir is
+#     therefore INSPECTED, never judged by its name (unless its name is itself a cache dir).
+#   - an ignored file byte-identical to the same path in the canonical checkout is not information
+#     this worktree alone holds. This generalises fa-ship.sh's config.local.sh special case, which
+#     had to be dropped on porting: hardcoding one repo's path would have left every other repo
+#     looking protected while protecting nothing.
+CACHE_DIRS="__pycache__ .pytest_cache .ruff_cache .mypy_cache .venv venv node_modules dist build"
+
+cleanup_is_cache() {  # cleanup_is_cache <relpath> — noise a reaper may drop without a backup?
+  local p=$1 base rest part
+  base=${p##*/}
+  case "$base" in .DS_Store|*.pyc) return 0 ;; esac
+  rest=${p%/*}
+  [ "$rest" = "$p" ] && return 1   # a bare filename: no directory component can excuse it
+  while [ -n "$rest" ]; do
+    part=${rest%%/*}
+    case " $CACHE_DIRS " in *" $part "*) return 0 ;; esac
+    [ "$part" = "$rest" ] && break
+    rest=${rest#*/}
+  done
+  return 1
+}
+
+cleanup_identical_to_main() {  # does $MAIN already hold this exact file, byte for byte?
+  [ -f "$1" ] && [ -f "$MAIN/${1#"$WT"/}" ] && cmp -s "$1" "$MAIN/${1#"$WT"/}"
+}
+
+cleanup_collapsed() {  # print the PRECIOUS files inside a git-collapsed ignored directory
+  local p=$1 prefix=${1%/} d rel
+  d="$WT/$prefix"
+  [ -d "$d" ] || return 0
+  # Files and symlinks only: an empty directory and one holding nothing but subdirectories of
+  # noise both lose nothing, and `find -type d` would name them as if they did.
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    cleanup_is_cache "$prefix/$rel" && continue
+    cleanup_identical_to_main "$d/$rel" && continue
+    printf '%s\n' "$prefix/$rel"
+  done < <(cd "$d" 2>/dev/null && find . -mindepth 1 \( -type f -o -type l \) 2>/dev/null | sed 's|^\./||')
+}
+
+cleanup_extra() {  # print one RELATIVE path per line for everything a reaper would destroy that is
+                   # NOT noise. EMPTY output = reap without a backup. A non-zero EXIT = "cannot
+                   # tell", which the caller must refuse to read as "safe".
+  local p
+  # pipefail is load-bearing here: a `git status` that fails makes this whole function fail, so the
+  # caller keeps the worktree instead of guessing that nothing precious was in it.
+  # NOT --untracked-files=all: with it git names ignored files individually and the COLLAPSED
+  # '!! sub/' form never appears — which made cleanup_collapsed dead code and let both halves of the
+  # trap pass without the inspection ever running (measured: mutating cleanup_collapsed into an
+  # immediate `return 0` left every test green). Without -uall git collapses a wholly-ignored
+  # directory, that is the form inspection actually judges, and the ship's own dirty check has
+  # already refused a worktree holding untracked files, so nothing untracked can reach here anyway.
+  git -C "$WT" status --porcelain --ignored 2>/dev/null \
+    | sed -n -e 's/^!! //p' -e 's/^?? //p' \
+    | while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        case "$p" in
+          */) cleanup_collapsed "$p" ;;
+          *)  if cleanup_is_cache "$p"; then continue; fi
+              if cleanup_identical_to_main "$WT/$p"; then continue; fi
+              printf '%s\n' "$p" ;;
+        esac
+      done
+}
+
+cleanup() {  # after a CONFIRMED release: reap the shipped worktree, its branch, and every branch
+             # whose content is already on the default branch. Ported from fa-ship.sh, whose
+             # routine has run in production since 2026-10-23; the CHANGELOG has advertised this
+             # step since 0.7.0 and the generalization silently dropped it.
+  local upstream="origin/$DEFAULT_BRANCH" in_wt b r extra bk list rel
+  # Never the canonical checkout: a ship must not delete the tree every other worktree is measured
+  # against. (Shipping $MAIN itself is a caller error; refusing is cheaper than recovering.)
+  if [ "$WT" = "$MAIN" ]; then
+    echo "⚠ cleanup: $WT is the canonical checkout — not touched" >&2
+    return 0
+  fi
+  git fetch -q --prune origin
+  in_wt=$(git worktree list --porcelain | sed -n 's#^branch refs/heads/##p')
+  # The shipped worktree itself, only when its branch is fully merged AND the tree is clean. A
+  # dirty or unmerged worktree is kept, and says so — never removed silently.
+  if ! extra=$(cleanup_extra); then
+    echo "⚠ cleanup: kept $WT (could not tell what it would lose)" >&2
+  elif ! git merge-base --is-ancestor "$BR" "$upstream"; then
+    echo "⚠ cleanup: kept $WT ($BR is not merged into $upstream)" >&2
+  elif [ -n "$(git -C "$WT" status --porcelain)" ]; then
+    echo "⚠ cleanup: kept $WT (the tree is dirty)" >&2
+  elif [ -z "$extra" ]; then
+    git worktree remove --force "$WT" && git branch -q -d "$BR" \
+      && phase "cleanup: removed worktree $WT and branch $BR"
+    if git ls-remote --exit-code --heads origin "$BR" >/dev/null 2>&1; then
+      git push -q origin --delete "$BR" && phase "cleanup: deleted origin/$BR"
+    fi
+  else
+    # Deletion is allowed ONLY after a timestamped backup of every uncommitted file that would be
+    # lost. Measured 2026-10-24: a removed worktree once took an uncommitted handover with it, so
+    # the routine must not lose data even where a human might have run --force.
+    bk="${RTC_BACKUP_DIR:-$HOME/.claude/backups/worktrees}/$(basename "$WT")-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$bk"
+    list=$extra
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      [ -e "$WT/$rel" ] || continue
+      mkdir -p "$bk/$(dirname "$rel")"
+      cp -R "$WT/$rel" "$bk/$rel"
+    done <<< "$list"
+    phase "cleanup: backed up $(printf '%s\n' "$list" | grep -c .) file(s) to $bk"
+    git worktree remove --force "$WT" && git branch -q -d "$BR" \
+      && phase "cleanup: removed worktree $WT (backed up first)"
+    if git ls-remote --exit-code --heads origin "$BR" >/dev/null 2>&1; then
+      git push -q origin --delete "$BR" && phase "cleanup: deleted origin/$BR"
+    fi
+  fi
+  # Every OTHER local branch already on the default branch, except one a worktree still has
+  # checked out — a concurrent session may be standing in it.
+  # HONEST ACCOUNTING of these two loops (mutated 2026-10-27, one safeguard at a time): the
+  # `in_wt` test is the one that carries the LOCAL sweep, because `git branch -d` already refuses
+  # a branch that is checked out — deleting the in_wt test from THIS loop changes nothing
+  # observable. The `$DEFAULT_BRANCH` test here is structurally unreachable: the ship has already
+  # required $MAIN to be on $DEFAULT_BRANCH, so the default branch is always in $in_wt. Both are
+  # kept as belt-and-braces (they match fa-ship.sh, and they survive a future caller that skips
+  # that precondition), but neither is pinned by a test and nobody should read them as covered.
+  for b in $(git for-each-ref --merged "$upstream" --format='%(refname:short)' refs/heads); do
+    [ "$b" = "$DEFAULT_BRANCH" ] && continue
+    printf '%s\n' "$in_wt" | grep -qx "$b" && continue
+    git branch -q -d "$b" && phase "cleanup: deleted merged branch $b"
+  done
+  # And the same for the remote-tracking refs: a merged topic branch left on origin is clutter that
+  # `git fetch --prune` will not clean, because it was never deleted there. Here the in_wt test IS
+  # load-bearing and IS tested (u3): `git push --delete` knows nothing about local worktrees. The
+  # $DEFAULT_BRANCH test is again unreachable-by-construction, for the reason above.
+  for r in $(git for-each-ref --merged "$upstream" --format='%(refname:lstrip=3)' refs/remotes/origin); do
+    case "$r" in "$DEFAULT_BRANCH"|HEAD) continue ;; esac
+    printf '%s\n' "$in_wt" | grep -qx "$r" && continue
+    git push -q origin --delete "$r" && phase "cleanup: deleted merged origin/$r"
+  done
   return 0
 }
 
@@ -445,5 +598,11 @@ if [ -x "$TOP/.rtc/post-release.sh" ]; then
     echo "✖ post-release hook failed — the release is published but NOT confirmed live" >&2
     exit 1
   fi
+fi
+# The release is confirmed live. What happens to the branch that carried it is now safe to decide —
+# and deciding it HERE is the point: the step every hand-rolled ship forgot is the one that lives
+# inside the loop. A cleanup failure never fails a confirmed release; the release outranks the tidy.
+if [ "${RTC_SKIP_CLEANUP:-0}" != 1 ]; then
+  cleanup || echo "⚠ cleanup failed; the release itself is done" >&2
 fi
 phase "done — ${PREFIX}${V} is live"

@@ -235,6 +235,32 @@ complete and was not:
 against a **local origin with a stubbed `gh`**, so the irreversible half is covered without
 publishing anything.
 
+After the release is confirmed live, the loop **reaps what it shipped**: the worktree and its branch
+are removed (locally *and* on the remote), every other local branch already contained in the default
+branch is deleted — except one a worktree still has checked out, because a concurrent session may be
+standing in it — and the same set of remote-tracking refs is pushed away, since `git fetch --prune`
+cannot clean a branch that was never deleted there. `RTC_SKIP_CLEANUP=1` keeps everything.
+
+Nothing is lost to a judgement call. What may be reaped without a backup is decided in
+`cleanup_extra()`, and its rules are harmonised with watch-your-step's `worktree remove` guard —
+deliberately **duplicated rather than shared**, because the two repos have no dependency on each other
+and this is the *automatic* path: an auto-reaper that leans on a guard written for manual commands is
+safe only while that guard happens to be installed.
+
+- `.DS_Store` and `*.pyc` are noise anywhere;
+- a path is excused by a **directory component**, never a substring — `venv/x` is cache, but
+  `myvenv/plan.md` is a ledger;
+- a directory git **collapsed** because everything in it is ignored (`!! sub/`) is *inspected*, never
+  judged by its name, because the name cannot separate a Finder-junk directory from one holding the
+  only copy of something;
+- an ignored file **byte-identical** to the same path in the canonical checkout is not information
+  this worktree alone holds;
+- anything else is **backed up to a timestamped directory** first — `RTC_BACKUP_DIR` moves it —
+  because a removed worktree once took an uncommitted handover with it.
+
+An unmerged, dirty, or canonical-checkout tree is kept, and says why. A cleanup failure never fails a
+confirmed release: the release outranks the tidy.
+
 `default_branch` is resolved from config, then the remote's own `origin/HEAD`, and only then
 assumed to be `main` — echoprism uses `master`, and a hardcoded `main` would mis-ship it. In prose,
 "merge to main" means **this repo's default branch**, never a branch literally named `main`.
