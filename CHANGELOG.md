@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.2
+
+### Fixed — the suite gates: `test_workers` is read, pre-flight runs alongside the suite, and once
+
+- `rtc-ship.json`'s `test_workers` was documented in `--help` and never read: only
+  `RTC_TEST_WORKERS` or a hardcoded 12 reached pytest. Workers now resolve
+  `RTC_TEST_WORKERS` > `test_workers` > 12, and a set-but-invalid value fails the gate naming
+  its source instead of falling through.
+- `.rtc/pre-flight.sh` ran to completion before the main suite started, although the two cover
+  disjoint files. It now runs concurrently and its log is shown when it fails. Measured on
+  free-agents' full gate: ~350 s → 194 s.
+- The ship path's standalone `hook pre-flight` looked for `.rtc/pre-flight` (no `.sh`), so it
+  was a silent no-op and every `RTC_SKIP_TESTS=1` ship ran **no pre-flight at all**. It now
+  runs exactly once in both modes.
+- New `tests/test_gates.sh` (16 checks) and two rehearsal cases; each new assertion was
+  watched failing against 0.8.1.
+
 ## 0.8.1
 
 ### Fixed — asset resolution is anchored to the worktree, not the canonical checkout
