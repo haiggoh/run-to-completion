@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.9.2
+
+### Fixed — the fa-ship.sh features the port dropped, found by a call-site parity sweep
+
+Before retiring `~/.claude/scripts/fa-ship.sh`, every command it runs was looked up in
+`rtc-ship.sh` by call site, not by header or CHANGELOG text. Five of its capabilities were missing,
+and the documentation claimed two of them. Each fix below has a rehearsal case that was RED first and
+is mutation-checked (removing the fix turns its case red again).
+
+- **The rebase is back.** The worktree is rebased onto `origin/<default-branch>` before any gate,
+  as fa-ship did. Without it, a branch behind the default branch passed every gate and then died at
+  `merge --ff-only`. A conflicting rebase is aborted (never left half-done) and stops the ship
+  before anything is tested, tagged or published, naming the rebase as the cause.
+- **The version argument is checked against the tree, at the door.** The version gate compared the
+  surfaces with *each other* only; nothing compared them with the `<version>` you typed. A typo
+  merged the default branch locally and then died inside the release-notes extraction with **no
+  message**. Now a mismatch with the manifest, or a CHANGELOG with no entry for that version, fails
+  first, naming both versions, before the default branch is touched.
+- **A failing phase is shown, not discarded.** `pre-package` and `gh release create` ran
+  `>/dev/null`, the blind spot fa-ship closed on 2026-10-26 with `run_logged`, one day after this
+  script was ported from it. Both phases now print a ✓/✖ verdict, and on failure the last 15 lines
+  of what the step itself said. Full logs are kept in `RTC_SHIP_LOG_DIR` (new; default
+  `${TMPDIR:-/tmp}/rtc-ship-logs/<repo>-<version>`).
+- **The release is asked what it holds.** After publishing, the loop lists the assets GitHub
+  actually serves back, as fa-ship did, and **fails** if a declared asset is not among them, rather
+  than counting the upload's exit code as proof.
+- **A failed backup keeps the worktree. This was a data-loss bug.** `cleanup` runs as
+  `cleanup || …`, which makes bash switch `set -e` off for the function's whole body, so a backup
+  whose `mkdir`/`cp` failed printed "backed up" and went on to `git worktree remove --force`. The
+  rehearsal reproduced it: an ignored file holding the only copy of its contents was destroyed.
+  Every backup step is now checked by hand, and a failure keeps the worktree and says so. A
+  dangling symlink is now backed up too instead of being skipped.
+
+The rehearsal also stopped sharing one log directory across every scratch repo (they are all named
+`main`): each rehearsal now pins its own, which is how a mutant was found reading an earlier run's
+log and passing for the wrong reason.
+
+### Corrections to earlier entries
+
+These entries are left as written; this is the correction, not a rewrite.
+
+- **0.6.4** said the loop runs "the version gate after the rebase". There was no rebase until 0.9.2.
+- **0.6.4** listed "worktree cleanup" among the steps. It arrived in 0.9.0 (that entry already says so).
+- **0.6.4–0.9.1** described the loop as a generalisation of `fa-ship.sh`. It was missing the five
+  capabilities above, and fa-ship's later `run_logged` fix never reached it.
+
 ## 0.9.1
 
 ### Added — reaping gets opt-outs, and the packaging phase gets the guard it never had

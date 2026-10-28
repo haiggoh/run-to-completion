@@ -44,7 +44,11 @@
 #                       (opt-outs for cleanup, reaping being the default: this env var, the
 #                       transient --no-reap flag, or "reap": false in rtc-ship.json permanently)
 #   RTC_BACKUP_DIR      where uncommitted files are backed up before their worktree is reaped
-#                       (default $HOME/.claude/backups/worktrees)
+#                       (default $HOME/.claude/backups/worktrees); a backup that cannot be written
+#                       KEEPS the worktree
+#   RTC_SHIP_LOG_DIR    where each phase's full output is kept: rebase, pre-package, the upload
+#                       (default ${TMPDIR:-/tmp}/rtc-ship-logs/<repo>-<version>); a failing phase
+#                       prints its verdict and the last 15 lines either way
 set -euo pipefail
 
 # Print every header comment line up to the first line of real code. NOT a hardcoded line range:
@@ -53,6 +57,24 @@ set -euo pipefail
 usage() { awk 'NR>1 && !/^#/ {exit} {sub(/^# ?/, ""); print}' "$0"; }
 T0=${SECONDS:-0}
 phase() { printf '[%4ss] %s\n' "$((SECONDS - T0))" "$*"; }
+# A phase whose output goes to /dev/null cannot be judged from the log: "ran quietly" and "died
+# silently, having done nothing" print the same nothing. fa-ship.sh learned this on 2026-10-26 on its
+# packaging step and grew run_logged — one day AFTER this script was ported from it, so the port ran
+# pre-package and the upload `>/dev/null` (found by the 2026-10-28 parity sweep). Capture, print a
+# verdict, and on failure show the tail of what the step itself said.
+run_logged() {  # run_logged <label> <log> <cmd...>
+  local label=$1 log=$2 rc; shift 2
+  mkdir -p "$(dirname "$log")"
+  phase "$label — running"
+  if "$@" >"$log" 2>&1; then
+    phase "✓ $label — done, $(wc -l <"$log" | tr -d ' ') log lines ($log)"
+  else
+    rc=$?
+    phase "✖ $label — FAILED (exit $rc); last 15 lines of $log:"
+    tail -n 15 "$log" | sed 's/^/      /' >&2
+    return "$rc"
+  fi
+}
 
 # ----------------------------------------------------------------------------------------------
 # Config: DATA comes from rtc-ship.json; COMMANDS come from .rtc/*.sh. Neither is guessed.
@@ -312,7 +334,7 @@ cleanup() {  # after a CONFIRMED release: reap the shipped worktree, its branch,
              # whose content is already on the default branch. Ported from fa-ship.sh, whose
              # routine has run in production since 2026-10-23; the CHANGELOG has advertised this
              # step since 0.7.0 and the generalization silently dropped it.
-  local upstream="origin/$DEFAULT_BRANCH" in_wt b r extra bk list rel
+  local upstream="origin/$DEFAULT_BRANCH" in_wt b r extra bk list rel bk_ok
   # Never the canonical checkout: a ship must not delete the tree every other worktree is measured
   # against. (Shipping $MAIN itself is a caller error; refusing is cheaper than recovering.)
   if [ "$WT" = "$MAIN" ]; then
@@ -339,20 +361,31 @@ cleanup() {  # after a CONFIRMED release: reap the shipped worktree, its branch,
     # Deletion is allowed ONLY after a timestamped backup of every uncommitted file that would be
     # lost. Measured 2026-10-24: a removed worktree once took an uncommitted handover with it, so
     # the routine must not lose data even where a human might have run --force.
+    # EVERY step of the backup is checked by hand: this function runs as `cleanup || …`, and bash
+    # switches set -e OFF for the whole body of a function called on the left of `||`. Unchecked, a
+    # failed mkdir/cp printed "backed up" and went on to `worktree remove --force` — measured
+    # 2026-10-28 (rehearsal p7): the only copy of an ignored file was destroyed.
     bk="${RTC_BACKUP_DIR:-$HOME/.claude/backups/worktrees}/$(basename "$WT")-$(date +%Y%m%d-%H%M%S)"
-    mkdir -p "$bk"
     list=$extra
-    while IFS= read -r rel; do
-      [ -n "$rel" ] || continue
-      [ -e "$WT/$rel" ] || continue
-      mkdir -p "$bk/$(dirname "$rel")"
-      cp -R "$WT/$rel" "$bk/$rel"
-    done <<< "$list"
-    phase "cleanup: backed up $(printf '%s\n' "$list" | grep -c .) file(s) to $bk"
-    git worktree remove --force "$WT" && git branch -q -d "$BR" \
-      && phase "cleanup: removed worktree $WT (backed up first)"
-    if git ls-remote --exit-code --heads origin "$BR" >/dev/null 2>&1; then
-      git push -q origin --delete "$BR" && phase "cleanup: deleted origin/$BR"
+    bk_ok=1
+    mkdir -p "$bk" 2>/dev/null || bk_ok=0
+    if [ "$bk_ok" = 1 ]; then
+      while IFS= read -r rel; do
+        [ -n "$rel" ] || continue
+        [ -e "$WT/$rel" ] || [ -L "$WT/$rel" ] || continue
+        { mkdir -p "$bk/$(dirname "$rel")" && cp -R "$WT/$rel" "$bk/$rel"; } 2>/dev/null \
+          || { bk_ok=0; break; }
+      done <<< "$list"
+    fi
+    if [ "$bk_ok" = 0 ]; then
+      echo "⚠ cleanup: kept $WT (backup failed — could not write $bk); nothing was removed" >&2
+    else
+      phase "cleanup: backed up $(printf '%s\n' "$list" | grep -c .) file(s) to $bk"
+      git worktree remove --force "$WT" && git branch -q -d "$BR" \
+        && phase "cleanup: removed worktree $WT (backed up first)"
+      if git ls-remote --exit-code --heads origin "$BR" >/dev/null 2>&1; then
+        git push -q origin --delete "$BR" && phase "cleanup: deleted origin/$BR"
+      fi
     fi
   fi
   # Every OTHER local branch already on the default branch, except one a worktree still has
@@ -450,6 +483,38 @@ if [ -z "$DEFAULT_BRANCH" ]; then
                    | sed 's|^origin/||' || true)
 fi
 [ -n "$DEFAULT_BRANCH" ] || DEFAULT_BRANCH=main
+SHIP_LOG_DIR=${RTC_SHIP_LOG_DIR:-${TMPDIR:-/tmp}/rtc-ship-logs/$(basename "$MAIN")-$V}
+
+# --- the door check: the version ARGUMENT is the version the tree carries ----------------------
+# The version gate below compares the surfaces with EACH OTHER; nothing compared them with $V, so a
+# typo'd argument merged main locally and then died inside the notes extraction with no message
+# (fa-ship.sh checked VERSION and the CHANGELOG heading against $V first; the port dropped it).
+door_manifest=$(cfg_get "manifest" ".claude-plugin/plugin.json")
+tree_v=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("version",""))' \
+         "$TOP/$door_manifest" 2>/dev/null || true)
+if [ -n "$tree_v" ] && [ "$tree_v" != "$V" ]; then
+  echo "✖ you asked to ship $V, but $door_manifest says $tree_v — fix the argument or bump the tree" >&2
+  exit 1
+fi
+door_changelog=$(cfg_get "changelog" "CHANGELOG.md")
+if [ -n "$door_changelog" ] && [ -f "$TOP/$door_changelog" ] \
+   && ! grep -qE "^##+[[:space:]]+\[?${V//./\\.}\]?([^0-9.]|$)" "$TOP/$door_changelog"; then
+  echo "✖ $door_changelog has no entry for $V — the release notes would be empty" >&2
+  exit 1
+fi
+
+# --- the rebase: onto the default branch as it is NOW, before any gate ------------------------
+# The header has always promised it and fa-ship.sh did it; the port had no `git rebase` call, so a
+# branch behind the default branch passed every gate and then died at `merge --ff-only`. A conflict
+# is aborted (never left half-rebased) and stops the ship before anything is tested or published.
+mkdir -p "$SHIP_LOG_DIR"
+git fetch -q origin
+if ! git rebase -q "origin/$DEFAULT_BRANCH" >"$SHIP_LOG_DIR/rebase.log" 2>&1; then
+  git rebase --abort >/dev/null 2>&1 || true
+  echo "✖ rebase onto origin/$DEFAULT_BRANCH failed — resolve it in $WT, then re-run:" >&2
+  sed 's/^/      /' "$SHIP_LOG_DIR/rebase.log" | tail -n 15 >&2
+  exit 1
+fi
 
 # --- the version gate, where a hand-rolled ship skips it --------------------------------
 # It runs AFTER the rebase and BEFORE the merge, because the bump lands between "suite green"
@@ -533,7 +598,8 @@ fi
 
 # --- assets: built by the repo's own hook, so the tool never hardcodes a filename ----------
 if [ -x "$TOP/.rtc/pre-package.sh" ]; then
-  ( cd "$TOP" && ./.rtc/pre-package.sh >/dev/null ) || { echo "✖ pre-package failed" >&2; exit 1; }
+  ( cd "$TOP" && run_logged "pre-package" "$SHIP_LOG_DIR/pre-package.log" ./.rtc/pre-package.sh ) \
+    || { echo "✖ pre-package failed" >&2; exit 1; }
 fi
 # Resolve the globs in the MAIN shell, not a process substitution: an `exit` inside `< <(...)`
 # only leaves that subshell, so a glob matching nothing would be dropped, the pipe would carry on
@@ -592,17 +658,34 @@ if [ "${#ASSETS[@]}" -gt 0 ]; then
 fi
 if [ -n "$notes" ]; then
   nf=$(mktemp); printf '%s\n' "$notes" > "$nf"
-  gh release create "${PREFIX}${V}" --title "$(basename "$MAIN") $V — $TITLE" \
-    --notes-file "$nf" "${ASSETS[@]}" >/dev/null
+  run_logged "gh release create" "$SHIP_LOG_DIR/gh-release.log" \
+    gh release create "${PREFIX}${V}" --title "$(basename "$MAIN") $V — $TITLE" \
+    --notes-file "$nf" ${ASSETS[@]+"${ASSETS[@]}"} || { rm -f "$nf"; exit 1; }
   rm -f "$nf"
 else
   # No changelog to draw notes from (a repo may legitimately have none). Let gh derive them from
   # the commits rather than shipping an EMPTY body — which is what the first version of this script
   # did, and an empty release is a release nobody reads.
-  gh release create "${PREFIX}${V}" --title "$(basename "$MAIN") $V — $TITLE" \
-    --generate-notes "${ASSETS[@]}" >/dev/null
+  run_logged "gh release create" "$SHIP_LOG_DIR/gh-release.log" \
+    gh release create "${PREFIX}${V}" --title "$(basename "$MAIN") $V — $TITLE" \
+    --generate-notes ${ASSETS[@]+"${ASSETS[@]}"} || exit 1
 fi
 phase "release published${ASSETS:+ with ${#ASSETS[@]} asset(s)}"
+# ASK the release what it holds (fa-ship.sh listed it; the port dropped it). An upload that exited 0
+# is a claim; the asset list GitHub serves back is the outcome. A declared asset it does not hold
+# fails the ship — "published" over a missing tarball is the silent failure this loop exists to stop.
+if [ "${#ASSETS[@]}" -gt 0 ]; then
+  held=$(gh release view "${PREFIX}${V}" --json assets -q '.assets[].name' 2>/dev/null || true)
+  printf '%s\n' "$held" | sed '/^$/d; s/^/  asset: /'
+  lost=()
+  for a in "${ASSETS[@]}"; do
+    printf '%s\n' "$held" | grep -qxF "$(basename "$a")" || lost+=("$(basename "$a")")
+  done
+  if [ "${#lost[@]}" -gt 0 ]; then
+    echo "✖ the published release does not hold: ${lost[*]} — re-upload with: gh release upload ${PREFIX}${V} <file>" >&2
+    exit 1
+  fi
+fi
 
 installed_version() {  # installed_version <plugin> — the version the INSTALLED cache holds, or ""
   local plugin=$1 base best v

@@ -200,18 +200,24 @@ MIT © Heiko Brantsch
     rtc-ship.sh --versions-only <worktree>        the version gate alone (fast, pre-commit)
     rtc-ship.sh --which-config                    the config this repo uses
 
-The loop runs eight phases in a fixed order: **gates** (the repo's suite plus
-`.rtc/pre-flight.sh`, with the version surfaces checked in lockstep) → **rebase** on
-`origin/<default-branch>` → **merge** (fast-forward) → **tag** (annotated; title and notes from
-the top `CHANGELOG.md` entry) → **visibility** (the published manifest must already declare the
-new version — a pushed tag is not yet a released one) → **release** (with the packaged assets) →
-**installed-copy refresh** (read back and verified) → **cleanup** (reap what shipped — see
-below).
+The loop runs nine phases in a fixed order: **door check** (the `<version>` you typed is the one
+the manifest carries, and the CHANGELOG has an entry for it) → **rebase** on
+`origin/<default-branch>` (a conflict is aborted and stops the ship) → **gates** (the repo's suite
+plus `.rtc/pre-flight.sh`, with the version surfaces checked in lockstep) → **merge**
+(fast-forward) → **tag** (annotated; title and notes from the `CHANGELOG.md` entry) → **visibility**
+(the published manifest must already declare the new version — a pushed tag is not yet a released
+one) → **release** (with the packaged assets, read back from GitHub afterwards) → **installed-copy
+refresh** (read back and verified) → **cleanup** (reap what shipped — see below).
 
 The gates cannot be skipped by forgetting to run a script — they are *in* it, and the version gate
 runs after the rebase and **before the merge**, which is the only place it is still meaningful: the
 version bump lands *after* the test suite has run, so a split is introduced between "tests green"
 and "PR opened", and only a re-check catches it.
+
+Every phase that can fail on its own words — the rebase, `pre-package`, the upload — keeps its full
+output in `RTC_SHIP_LOG_DIR` (default `${TMPDIR:-/tmp}/rtc-ship-logs/<repo>-<version>`) and prints a
+✓/✖ verdict; a failure also prints the last 15 lines of what the step said. A phase whose output
+goes to `/dev/null` cannot be judged: "ran quietly" and "died having done nothing" look identical.
 
 A repo configures the tool with two things, both inside the repo and both committed:
 
@@ -231,6 +237,9 @@ complete and was not:
 - **A failing `.rtc/post-release.sh` fails the ship.** That hook is where a repo verifies the
   refresh it just performed; warning and continuing let a release whose installed copy is still the
   old version print "done — v1.2.3 is live".
+- **The release is read back.** After the upload, the loop lists the assets GitHub actually holds
+  and fails if a declared one is missing — the upload's exit code is a claim, the served list is
+  the outcome.
 - **The refresh itself is verified.** `get-haiggoh apply` exits 0 having copied nothing when the
   manifest it reads is still the old version (a CDN propagation window, a stale marketplace
   cache), so a green exit code is not proof. The installed version is read back and compared, and
@@ -279,7 +288,9 @@ safe only while that guard happens to be installed.
 - an ignored file **byte-identical** to the same path in the canonical checkout is not information
   this worktree alone holds;
 - anything else is **backed up to a timestamped directory** first — `RTC_BACKUP_DIR` moves it —
-  because a removed worktree once took an uncommitted handover with it.
+  because a removed worktree once took an uncommitted handover with it. A backup that cannot be
+  written (an unwritable directory, a full disk) **keeps the worktree** and says so; it never
+  proceeds to the removal.
 
 An unmerged, dirty, or canonical-checkout tree is kept, and says why. A cleanup failure never fails a
 confirmed release: the release outranks the tidy.
