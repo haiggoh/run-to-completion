@@ -250,9 +250,10 @@ complete and was not:
   the published manifest and refuses to create the release until it declares `$V`, leaving a pushed
   tag and no release, which is clean to redo.
 
-`tests/test_ship_rehearsal.sh` rehearses the whole loop — merge, tag, push, release, refresh —
+`tests/test_ship_*.sh` rehearse the whole loop — merge, tag, push, release, refresh, cleanup —
 against a **local origin with a stubbed `gh`**, so the irreversible half is covered without
-publishing anything.
+publishing anything. The rig is `tests/lib/rehearsal.sh`; the cases are split across six files
+so the gate runs them in parallel.
 
 After the release is confirmed live, the loop **reaps what it shipped**: the worktree and its branch
 are removed (locally *and* on the remote), every other local branch already contained in the default
