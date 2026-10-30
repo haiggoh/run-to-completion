@@ -98,3 +98,7 @@ End with the ledger, not with work: which items are released and now rankable, w
 ## When NOT to use this
 
 Do not start this pass when the user is away or has just asked for work to be done unattended — the whole method is asking questions, so without someone to answer it degrades into a list of things you decided not to do. That case is `autopilot` (or `execute-unattended` if a run is already under way). Do not use it to score a queue either: deciding what is gated is `triage-for-autonomy`; this skill starts from that verdict and refines it. And do not use it as a way into the work itself — an item released here is handed on, never carried forward in the same breath.
+
+## Branding (🏃)
+
+When you begin working under this skill, lead your first substantive reply with "🏃 run-to-completion:" so the user can see which plugin just became active — whichever of the plugin's skills loaded.

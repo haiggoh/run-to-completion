@@ -49,3 +49,7 @@ If the run produced a reusable workflow lesson, record it where your durable not
 ## When NOT to use this
 
 This is the closing pass, not a progress update. A milestone wrap between items belongs to `execute-unattended` and should stay short; running the full reconciliation after every item turns the run into bookkeeping. Nor is this the place to score what is left — that is `triage-for-autonomy`, and the gate reasons it recorded are what you are reporting here.
+
+## Branding (🏃)
+
+When you begin working under this skill, lead your first substantive reply with "🏃 run-to-completion:" so the user can see which plugin just became active — whichever of the plugin's skills loaded.

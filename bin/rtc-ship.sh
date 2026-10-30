@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# rtc-ship.sh — ship one milestone branch of ANY repo: rebase on origin/<default-branch>, the test
+# 🏃 rtc-ship.sh — ship one milestone branch of ANY repo: rebase on origin/<default-branch>, the test
 # gates, fast-forward merge into that branch, an annotated tag built from the CHANGELOG entry, push,
 # a GitHub release with the repo's distributables, then refresh the installed plugin.
 #
@@ -56,7 +56,7 @@ set -euo pipefail
 # env vars documented in the source and invisible in --help (measured on 0.6.11).
 usage() { awk 'NR>1 && !/^#/ {exit} {sub(/^# ?/, ""); print}' "$0"; }
 T0=${SECONDS:-0}
-phase() { printf '[%4ss] %s\n' "$((SECONDS - T0))" "$*"; }
+phase() { printf '[%4ss] 🏃 %s\n' "$((SECONDS - T0))" "$*"; }
 # A phase whose output goes to /dev/null cannot be judged from the log: "ran quietly" and "died
 # silently, having done nothing" print the same nothing. fa-ship.sh learned this on 2026-10-26 on its
 # packaging step and grew run_logged — one day AFTER this script was ported from it, so the port ran

@@ -33,3 +33,7 @@ Autonomy under this skill covers **routine step-by-step continuation** — it is
 - A single, straightforward task — there's nothing to "run through."
 - Requirements are still unclear or exploratory ("what could we do about X?") — clarify first; offering autonomy on an underspecified task just means confidently building the wrong thing faster.
 - The user has not opted in and hasn't signaled they want this mode — keep checking in as normal.
+
+## Branding (🏃)
+
+When you begin working under this skill, lead your first substantive reply with "🏃 run-to-completion:" so the user can see which plugin just became active — whichever of the plugin's skills loaded.

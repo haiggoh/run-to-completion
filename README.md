@@ -1,4 +1,4 @@
-# run-to-completion
+# 🏃 run-to-completion
 
 Claude behavior for **running a queue of open work to completion without stopping** —
 and for stopping *well* when the only work left needs a human.

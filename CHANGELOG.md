@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.3
+
+### Added — 🏃 credit-moment branding across the plugin's surfaces
+
+- The repo's GitHub About emoji (🏃) now leads what the user and model read at the plugin's credit
+  moments (plan 2026-10-28, §Wave 2 Task 6): the SessionStart nudge's first token, rtc-ship.sh's
+  step headers (`[   5s] 🏃 …`) and its --help banner, a ≤3-line Branding section in all seven
+  SKILL.md files, the plugin.json description, and the README h1.
+- New tests/test_branding.sh pins every surface with exact strings; test_nudge.sh's label check
+  strengthened from substring to exact prefix.
+
 ## 0.9.2
 
 ### Fixed — the fa-ship.sh features the port dropped, found by a call-site parity sweep

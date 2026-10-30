@@ -156,3 +156,7 @@ If you reach such an action without having asked, the absence of anyone to answe
 ## When NOT to use this
 
 Do not run this way while the user is actively iterating with you turn by turn: the whole design assumes nobody is reading between items, so suppressing check-ins in a live conversation just removes their steering. Use `triage-for-autonomy` to choose what to work on, and `close-out-the-run` to reconcile when the run ends.
+
+## Branding (🏃)
+
+When you begin working under this skill, lead your first substantive reply with "🏃 run-to-completion:" so the user can see which plugin just became active — whichever of the plugin's skills loaded.

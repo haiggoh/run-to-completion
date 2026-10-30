@@ -101,3 +101,7 @@ The tier lives as a short marker at the front of the gate reason the queue alrea
 Skip triage entirely for a single task, or a queue of one: there is nothing to rank, and scoring it is pure overhead. Skip it too when the user has already named the item they want done — they have made the selection, and re-deriving it is second-guessing rather than triage.
 
 Then: use `execute-unattended` to run the Tier 1 items, `close-out-the-run` to reconcile when the run ends, and `ungate-queue` to walk gated items with the user present — cheapest tier first. That pass returns items with their gates removed and nothing else done, so they flow straight back into this ranking alongside the ordinary actionable ones. Ungating feeds the same queue; it does not run beside it.
+
+## Branding (🏃)
+
+When you begin working under this skill, lead your first substantive reply with "🏃 run-to-completion:" so the user can see which plugin just became active — whichever of the plugin's skills loaded.

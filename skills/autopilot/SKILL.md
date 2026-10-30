@@ -54,3 +54,7 @@ That pass is deliberately narrow: it removes gates and records the answers, and 
 ## When NOT to use this
 
 Use `triage-for-autonomy`, `execute-unattended`, or `close-out-the-run` directly if you are already in a specific phase.
+
+## Branding (🏃)
+
+When you begin working under this skill, lead your first substantive reply with "🏃 run-to-completion:" so the user can see which plugin just became active — whichever of the plugin's skills loaded.
