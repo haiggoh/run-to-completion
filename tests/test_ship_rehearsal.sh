@@ -113,4 +113,15 @@ is "a stale version-bearing asset FAILS the ship" "1" "$rc"
 has "and names the stale asset" "$(cat "$D/out")" "rehearsal-0.1.0"
 is "and the release was NOT published" "0" "$(grep -c 'release published' "$D/out")"
 
+# The SHIP path's gate exit code, pinned end to end. With the suite gates ENABLED (the rig's
+# RTC_SKIP_TESTS=1 overridden to 0 — env's last assignment wins) and no tests present, the gate
+# must fail the ship non-zero BEFORE anything is merged, tagged or published. The 2026-10-28
+# free-agents 0.47.0 attempt printed '✖ tests failed' and still exited 0.
+D="$TMP/r5"; rehearse "$D"
+rc=$(ship_c "$D" RTC_SKIP_TESTS=0)
+is "a red/empty suite fails the SHIP path" "1" "$rc"
+has "and says the suite failed" "$(cat "$D/out")" "FAILED"
+is "and nothing was merged into the default branch" "0" "$(git -C "$D/main" log --oneline main | grep -c 'bump')"
+is "and no tag was pushed" "" "$(git -C "$D/origin.git" tag -l v0.2.0)"
+
 summary

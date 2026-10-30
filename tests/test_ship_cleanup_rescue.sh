@@ -63,4 +63,24 @@ is "  and its branch survives" "feat/unmerged" "$(branches "$D/main" | grep -x f
 # backstop for a state this harness cannot construct, not a covered path. The foreign-worktree
 # assertions above are what the rehearsal can prove.
 
+# core.quotePath: at its default git C-quotes a non-ASCII ignored name (!! "caf\303\251.local.md");
+# the backup loop's -e test then fails on the quoted literal, and the old 'skip' let
+# `worktree remove --force` destroy the only copy (measured 2026-10-28, rehearsal p7).
+D="$TMP/u10"; rehearse "$D"
+( cd "$D/wt" && echo 'the only copy' > 'café.local.md' && printf '*.local.md\n' >> .gitignore \
+    && git add .gitignore && git -c user.email=t@t -c user.name=t commit -qm 'ignore local.md' )
+is "a non-ASCII ignored file does not fail the ship" "0" "$(ship_c "$D")"
+is "  and is rescued under its REAL name" "café.local.md" "$(bk | grep -x 'café.local.md' || echo '')"
+has "  and the backup count names copied files" "$(cat "$D/out")" "backed up 1 file(s)"
+
+# A name git still quotes even with quotePath=false (control chars are always C-quoted) is
+# "cannot tell": the worktree is KEPT, never removed over a path the backup could not verify.
+D="$TMP/u11"; rehearse "$D"
+( cd "$D/wt" && echo 'the only copy' > "$(printf 'line1\nline2.local.md')" \
+    && printf '*.local.md\n' >> .gitignore \
+    && git add .gitignore && git -c user.email=t@t -c user.name=t commit -qm 'ignore local.md' )
+is "a control-char ignored name does not fail the ship" "0" "$(ship_c "$D")"
+is "  but the worktree is KEPT (cannot tell what removal would lose)" "0" "$([ -d "$D/wt" ] && echo 0 || echo 1)"
+has "  and says why" "$(cat "$D/out")" "kept"
+
 summary

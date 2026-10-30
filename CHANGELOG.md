@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.5
+
+### Fixed — three rtc-ship.sh defects found by the 2026-10-28 free-agents 0.47.0 ship review
+
+- `--help` no longer leads with `!/usr/bin/env bash`: `usage()`'s awk had only `NR>1`, so line 1
+  printed with its `#` stripped. Now `NR==1 {next}` (the form the fa-ship retirement stub already
+  used). Pinned: first line is the banner, no `!`-led line anywhere in the output.
+- A red suite now provably fails `--test-only` with exit 1 (rehearsal with a deliberately failing
+  pytest, the planted positive for the 2026-10-28 report of `'✖ tests failed'` followed by exit
+  0 — the current `gates; exit $?` / `gates || exit 1` paths verified by execution, now pinned by
+  a test so a future refactor cannot reintroduce the fail-open exit).
+- cleanup()'s backup no longer loses C-quoted names: `git status` runs with
+  `-c core.quotePath=false` so a non-ASCII ignored file (`café.local.md`) is listed raw instead of
+  as `"caf\303\251.local.md"`; a listed path that still does not exist on disk (control-char names
+  stay quoted) is now "cannot tell" — `bk_ok=0`, the worktree is KEPT — instead of a silent skip
+  that let `worktree remove --force` destroy the only copy (measured 2026-10-28, rehearsal p7).
+  The log line counts copied files, not listed lines. Rehearsals: non-ASCII name rescued under its
+  real name; newline-named file keeps the worktree with a "kept" reason.
+
 ## 0.9.4
 
 ### Changed — the ship mark 🚢 appears only at the ship moments (user amendment 2026-10-30)

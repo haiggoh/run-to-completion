@@ -17,10 +17,12 @@ POUT="$(bash -c "$PD; T0=0; SECONDS=5; phase hello" 2>&1)"
 r=0; [ "$POUT" = "[   5s] hello" ] || r=1
 check $r "phase() emits plain headers (got: $POUT)"
 
-# 2) the banner/identity line in --help leads with the ship
-L2="$("$SHIP" --help | sed -n '2p')"
-r=0; case "$L2" in "🚢 rtc-ship.sh — ship one milestone branch"*) ;; *) r=1;; esac
-check $r "--help banner leads with 🚢 (got: ${L2:0:50})"
+# 2) the banner/identity line in --help leads with the ship — on LINE 1 now that usage() skips
+# the shebang (before 0.9.5 line 1 was '!/usr/bin/env bash' and this pin read line 2, encoding the
+# bug; the pin moved to 1p with the fix, and test_rtc_ship.sh pins the negative: no '!'-led line)
+L1="$("$SHIP" --help | sed -n '1p')"
+r=0; case "$L1" in "🚢 rtc-ship.sh — ship one milestone branch"*) ;; *) r=1;; esac
+check $r "--help banner leads with 🚢 (got: ${L1:0:50})"
 
 # 3) the named ship moments carry 🚢, verbatim phrasing (user 2026-10-30)
 for frag in 'phase "🚢 starting the shipping loop' \

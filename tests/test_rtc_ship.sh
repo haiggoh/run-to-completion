@@ -25,6 +25,10 @@ is "--help exits 0" "$?" "0"
 # Exactly the worktree-taking invocation shapes: the plain one and the --no-reap variant.
 # A new flag that takes <worktree-dir> must be added here, or this count goes red on purpose.
 is "--help prints a usage block" "$(grep -c 'rtc-ship.sh <worktree-dir>' "$TMP/help")" "2"
+# The shebang is not help: usage()'s old awk had only `NR>1`, so line 1 printed with its '#'
+# stripped and --help led with '!/usr/bin/env bash' (found 2026-10-28).
+is "--help's first line is the banner, not the shebang" "1" "$(head -1 "$TMP/help" | grep -c 'rtc-ship.sh —')"
+is "--help never prints a '!'-led line" "0" "$(grep -c '^!' "$TMP/help")"
 
 # --help must document EVERYTHING the script reads. `usage()` used to print a hardcoded line range,
 # so any env var added past line 31 was live and invisible — 0.6.11 shipped its tag-visibility gate
@@ -106,6 +110,19 @@ is "the gate works outside a git repo (the installed cache is not one)" "0" "$?"
 is "and actually READ the surfaces rather than reporting <none>" \
    "$(grep -c '<none>' "$TMP/ng")" "0"
 is "and it agrees with itself" "$(grep -c 'version surfaces agree' "$TMP/ng")" "1"
+
+# A RED suite must fail --test-only non-zero. The 2026-10-28 free-agents 0.47.0 ship attempt
+# printed '✖ tests failed' and still exited 0, so a caller scripting off $? read a failed gate
+# as a pass. Planted positive: this scratch repo's only test fails on purpose.
+RED="$TMP/red"; mkdir -p "$RED/.claude-plugin" "$RED/tests"
+git init -q "$RED"
+printf '{"version":"0.1.0"}' > "$RED/.claude-plugin/plugin.json"
+printf '# Changelog\n\n## 0.1.0\n\nx\n' > "$RED/CHANGELOG.md"
+printf 'def test_red():\n    assert False, "deliberately red gate"\n' > "$RED/tests/test_red.py"
+( cd "$RED" && git add -A && git -c user.email=t@t -c user.name=t commit -qm init )
+"$ROOT/bin/rtc-ship.sh" --test-only "$RED" >"$TMP/red-out" 2>&1
+is "a red suite fails --test-only" "$?" "1"
+is "and says the tests failed" "1" "$(grep -c 'tests failed' "$TMP/red-out")"
 
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

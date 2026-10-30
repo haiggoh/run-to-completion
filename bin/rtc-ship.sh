@@ -53,8 +53,10 @@ set -euo pipefail
 
 # Print every header comment line up to the first line of real code. NOT a hardcoded line range:
 # `sed -n '2,31p'` silently hid every line added past 31, which is how a gate shipped with its own
-# env vars documented in the source and invisible in --help (measured on 0.6.11).
-usage() { awk 'NR>1 && !/^#/ {exit} {sub(/^# ?/, ""); print}' "$0"; }
+# env vars documented in the source and invisible in --help (measured on 0.6.11). NR==1 skips the
+# shebang: with only `NR>1` the first line printed with its '#' stripped, so --help led with
+# '!/usr/bin/env bash' (found 2026-10-28).
+usage() { awk 'NR==1 {next} !/^#/ {exit} {sub(/^# ?/, ""); print}' "$0"; }
 T0=${SECONDS:-0}
 phase() { printf '[%4ss] %s\n' "$((SECONDS - T0))" "$*"; }
 # A phase whose output goes to /dev/null cannot be judged from the log: "ran quietly" and "died
@@ -317,7 +319,11 @@ cleanup_extra() {  # print one RELATIVE path per line for everything a reaper wo
   # immediate `return 0` left every test green). Without -uall git collapses a wholly-ignored
   # directory, that is the form inspection actually judges, and the ship's own dirty check has
   # already refused a worktree holding untracked files, so nothing untracked can reach here anyway.
-  git -C "$WT" status --porcelain --ignored 2>/dev/null \
+  # quotePath=false: with the default git C-quotes a non-ASCII name ('!! "caf\303\251.local.md"'),
+  # the backup loop's -e test then fails on the quoted literal, and a mere skip would let
+  # `worktree remove --force` destroy the only copy (measured 2026-10-28). Bytes <0x20 and '"'/'\\'
+  # stay quoted even with quotePath=false — those hit the cannot-tell rule in cleanup() below.
+  git -C "$WT" -c core.quotePath=false status --porcelain --ignored 2>/dev/null \
     | sed -n -e 's/^!! //p' -e 's/^?? //p' \
     | while IFS= read -r p; do
         [ -n "$p" ] || continue
@@ -334,7 +340,7 @@ cleanup() {  # after a CONFIRMED release: reap the shipped worktree, its branch,
              # whose content is already on the default branch. Ported from fa-ship.sh, whose
              # routine has run in production since 2026-10-23; the CHANGELOG has advertised this
              # step since 0.7.0 and the generalization silently dropped it.
-  local upstream="origin/$DEFAULT_BRANCH" in_wt b r extra bk list rel bk_ok
+  local upstream="origin/$DEFAULT_BRANCH" in_wt b r extra bk list rel bk_ok n=0
   # Never the canonical checkout: a ship must not delete the tree every other worktree is measured
   # against. (Shipping $MAIN itself is a caller error; refusing is cheaper than recovering.)
   if [ "$WT" = "$MAIN" ]; then
@@ -372,15 +378,22 @@ cleanup() {  # after a CONFIRMED release: reap the shipped worktree, its branch,
     if [ "$bk_ok" = 1 ]; then
       while IFS= read -r rel; do
         [ -n "$rel" ] || continue
-        [ -e "$WT/$rel" ] || [ -L "$WT/$rel" ] || continue
+        # A LISTED path that does not exist is "cannot tell", never "skip": a name git still
+        # C-quotes (control chars survive quotePath=false) fails this -e test on the quoted
+        # literal, and a skip would let the remove below destroy the only copy (measured
+        # 2026-10-28, rehearsal p7). Keep the worktree instead.
+        [ -e "$WT/$rel" ] || [ -L "$WT/$rel" ] || { bk_ok=0; break; }
         { mkdir -p "$bk/$(dirname "$rel")" && cp -R "$WT/$rel" "$bk/$rel"; } 2>/dev/null \
           || { bk_ok=0; break; }
+        n=$((n + 1))
       done <<< "$list"
     fi
     if [ "$bk_ok" = 0 ]; then
-      echo "⚠ cleanup: kept $WT (backup failed — could not write $bk); nothing was removed" >&2
+      echo "⚠ cleanup: kept $WT (backup failed, or a listed file was missing — cannot tell what removal would lose); nothing was removed" >&2
     else
-      phase "cleanup: backed up $(printf '%s\n' "$list" | grep -c .) file(s) to $bk"
+      # Count COPIED files, not listed lines: the log once reported the listed count after a
+      # skipped copy, so "backed up N" could name files the backup never held.
+      phase "cleanup: backed up $n file(s) to $bk"
       git worktree remove --force "$WT" && git branch -q -d "$BR" \
         && phase "cleanup: removed worktree $WT (backed up first)"
       if git ls-remote --exit-code --heads origin "$BR" >/dev/null 2>&1; then
