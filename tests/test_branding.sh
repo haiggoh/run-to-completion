@@ -1,35 +1,58 @@
 #!/usr/bin/env bash
-# Static-surface + ship-loop branding pins (plan 2026-10-28, §Wave 2 Task 6): the mark is the
-# repo's GitHub About emoji (🏃), verbatim, on the plugin's identity surfaces and the shipper's
-# user-readable headers. R2: exact strings, never loosened.
+# Ship-mark pins (plan 2026-10-28, amendment 2026-10-30): the ship CLI (rtc-ship.sh) carries 🚢 —
+# the literal ship — ONLY at the moments the user named: the invocation line, the tag-push and
+# release confirmations, the --help banner, and the finale (🏃🚢 combined). Routine phases
+# (tests, rebase, refresh, cleanup) stay UNBRANDED — "testing is too early for the ship".
+# The plugin's own surfaces keep 🏃 (its About emoji). R2: exact strings, never loosened.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 fail=0
 check() { if [ "$1" = 0 ]; then echo "  ok: $2"; else echo "  FAIL: $2"; fail=1; fi; }
+SHIP="$ROOT/bin/rtc-ship.sh"
 
-# 1) phase() — every ship step header leads with the mark after the elapsed-seconds stamp
-PD="$(/usr/bin/grep -m1 '^phase()' "$ROOT/bin/rtc-ship.sh")"
+# 1) phase() itself is UNBRANDED — the mark lives on specific call sites, not the emitter
+PD="$(/usr/bin/grep -m1 '^phase()' "$SHIP")"
 POUT="$(bash -c "$PD; T0=0; SECONDS=5; phase hello" 2>&1)"
-r=0; [ "$POUT" = "[   5s] 🏃 hello" ] || r=1
-check $r "phase() headers lead with 🏃 (got: $POUT)"
+r=0; [ "$POUT" = "[   5s] hello" ] || r=1
+check $r "phase() emits plain headers (got: $POUT)"
 
-# 2) the banner/identity line in --help (usage() prints the header comment, one # stripped)
-L2="$("$ROOT/bin/rtc-ship.sh" --help | sed -n '2p')"
-r=0; case "$L2" in "🏃 rtc-ship.sh — ship one milestone branch"*) ;; *) r=1;; esac
-check $r "--help banner leads with 🏃 (got: ${L2:0:50})"
+# 2) the banner/identity line in --help leads with the ship
+L2="$("$SHIP" --help | sed -n '2p')"
+r=0; case "$L2" in "🚢 rtc-ship.sh — ship one milestone branch"*) ;; *) r=1;; esac
+check $r "--help banner leads with 🚢 (got: ${L2:0:50})"
 
-# 3) plugin.json description (R6)
+# 3) the named ship moments carry 🚢, verbatim phrasing (user 2026-10-30)
+for frag in 'phase "🚢 starting the shipping loop' \
+            'phase "🚢 merged, tagged' \
+            'phase "🚢 tag ${PREFIX}${V} is VISIBLE' \
+            'phase "🚢 release published'; do
+  r=0; /usr/bin/grep -qF "$frag" "$SHIP" || r=1
+  check $r "ship moment pinned: $frag"
+done
+# and the finale combines both identities
+r=0; /usr/bin/grep -qF 'phase "🏃🚢 done —' "$SHIP" || r=1
+check $r "finale combines both marks (🏃🚢)"
+
+# 4) NOTHING ELSE is branded: exactly one 🏃-carrying phase call (the finale), four 🚢 ones
+N_RUN=$(/usr/bin/grep -cF 'phase "🏃' "$SHIP")
+r=0; [ "$N_RUN" = "1" ] || r=1
+check $r "exactly one 🏃 phase call — the finale (got: $N_RUN)"
+N_SHIP=$(/usr/bin/grep -cF 'phase "🚢' "$SHIP")
+r=0; [ "$N_SHIP" = "4" ] || r=1
+check $r "exactly four 🚢 phase calls (got: $N_SHIP)"
+
+# 5) the ship-approval question in the skill layer carries the ship mark, verbatim phrasing
+/usr/bin/grep -qF '🚢 are you approving to ship the new release?' "$ROOT/skills/execute-unattended/SKILL.md"
+check $? "execute-unattended asks the approval question with 🚢"
+
+# 6) the plugin's own surfaces keep 🏃 (unchanged from 0.9.3)
 DESC="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["description"])' "$ROOT/.claude-plugin/plugin.json")"
 r=0; case "$DESC" in "🏃 "*) ;; *) r=1;; esac
-check $r "plugin.json description leads with 🏃 (got: ${DESC:0:40})"
-
-# 4) README h1 (R6)
+check $r "plugin.json description still leads with 🏃"
 H1="$(head -1 "$ROOT/README.md")"
 r=0; [ "$H1" = "# 🏃 run-to-completion" ] || r=1
-check $r "README h1 is '# 🏃 run-to-completion' (got: $H1)"
-
-# 5) R5: a Branding section in EVERY skill file
+check $r "README h1 still '# 🏃 run-to-completion'"
 for d in "$ROOT"/skills/*/; do
   r=0; /usr/bin/grep -q '^## Branding (🏃)$' "$d/SKILL.md" || r=1
   check $r "$(basename "$d")/SKILL.md carries '## Branding (🏃)'"

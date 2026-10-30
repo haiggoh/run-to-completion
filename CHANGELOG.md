@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.4
+
+### Changed — the ship mark 🚢 appears only at the ship moments (user amendment 2026-10-30)
+
+- 0.9.3 branded every rtc-ship phase header with 🏃; the user ruled that too much. The ship CLI now
+  carries the literal ship 🚢 only at the moments they named: the invocation line
+  (`🚢 starting the shipping loop …`), the tag-push and visibility confirmations, the release
+  confirmation, and the --help banner — with the finale combining both identities
+  (`🏃🚢 done — … is live`). All other phase headers (tests, rebase, refresh, cleanup) are back to
+  plain `[   4s] …` lines.
+- `execute-unattended`'s Branding section gains the approval moment: the ship-approval question is
+  asked with the mark — "🚢 are you approving to ship the new release?".
+- tests/test_branding.sh pins every ship moment with exact source strings, pins the negative too
+  (exactly one 🏃 phase call, four 🚢 calls), and keeps the 0.9.3 plugin-surface pins.
+
 ## 0.9.3
 
 ### Added — 🏃 credit-moment branding across the plugin's surfaces

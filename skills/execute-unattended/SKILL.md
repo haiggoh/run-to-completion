@@ -159,4 +159,4 @@ Do not run this way while the user is actively iterating with you turn by turn: 
 
 ## Branding (🏃)
 
-When you begin working under this skill, lead your first substantive reply with "🏃 run-to-completion:" so the user can see which plugin just became active — whichever of the plugin's skills loaded.
+When you begin working under this skill, lead your first substantive reply with "🏃 run-to-completion:" so the user can see which plugin just became active — whichever of the plugin's skills loaded. When you ask the user to approve shipping, ask it with the ship mark: "🚢 are you approving to ship the new release?"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 🏃 rtc-ship.sh — ship one milestone branch of ANY repo: rebase on origin/<default-branch>, the test
+# 🚢 rtc-ship.sh — ship one milestone branch of ANY repo: rebase on origin/<default-branch>, the test
 # gates, fast-forward merge into that branch, an annotated tag built from the CHANGELOG entry, push,
 # a GitHub release with the repo's distributables, then refresh the installed plugin.
 #
@@ -56,7 +56,7 @@ set -euo pipefail
 # env vars documented in the source and invisible in --help (measured on 0.6.11).
 usage() { awk 'NR>1 && !/^#/ {exit} {sub(/^# ?/, ""); print}' "$0"; }
 T0=${SECONDS:-0}
-phase() { printf '[%4ss] 🏃 %s\n' "$((SECONDS - T0))" "$*"; }
+phase() { printf '[%4ss] %s\n' "$((SECONDS - T0))" "$*"; }
 # A phase whose output goes to /dev/null cannot be judged from the log: "ran quietly" and "died
 # silently, having done nothing" print the same nothing. fa-ship.sh learned this on 2026-10-26 on its
 # packaging step and grew run_logged — one day AFTER this script was ported from it, so the port ran
@@ -465,6 +465,10 @@ BR=$(git branch --show-current)
 TOP=$(git rev-parse --show-toplevel)
 MAIN=${RTC_MAIN:-$(git rev-parse --git-common-dir | sed 's#/.git$##')}
 PREFIX=$(cfg_get "tag_prefix" "")
+# The invocation moment (plan amendment, user 2026-10-30): the ship mark appears when the loop
+# STARTS, at the tag-push/release confirmations, and at the finale — nowhere else. Routine phases
+# (tests, rebase, refresh, cleanup) stay clean: "testing is too early for the ship."
+phase "🚢 starting the shipping loop — $(basename "$MAIN") ${PREFIX}${V}"
 # The reaping opt-out is validated HERE, before anything irreversible runs: a typo'd value
 # ("flase") must abort the ship at the door — after the tag is pushed is far too late to learn
 # the config was never read. Reaping is the default; the routes are --no-reap (transient),
@@ -557,7 +561,7 @@ git tag -a "${PREFIX}${V}" -m "$(basename "$MAIN") $V — $TITLE
 
 $notes"
 git push -q origin "$DEFAULT_BRANCH" "${PREFIX}${V}"
-phase "merged, tagged ${PREFIX}${V}, pushed"
+phase "🚢 merged, tagged ${PREFIX}${V}, pushed"
 
 # --- the tag must be VISIBLE, not merely pushed ------------------------------------------------
 # A push returns BEFORE the host serves the new state, and the window is real (measured 2026-10-14:
@@ -582,7 +586,7 @@ if [ "${RTC_TAG_VISIBILITY:-1}" = 1 ]; then
   vis_tries=0
   while :; do
     got=$(published_version)
-    if [ "$got" = "$V" ]; then phase "tag ${PREFIX}${V} is VISIBLE to installers"; break; fi
+    if [ "$got" = "$V" ]; then phase "🚢 tag ${PREFIX}${V} is VISIBLE to installers"; break; fi
     vis_tries=$((vis_tries + 1))
     if [ "$vis_tries" -ge "${RTC_TAG_VISIBILITY_TRIES:-6}" ]; then
       echo "✖ the published manifest declares ${got:-<nothing>}, not $V — installers still resolve the old version" >&2
@@ -670,7 +674,7 @@ else
     gh release create "${PREFIX}${V}" --title "$(basename "$MAIN") $V — $TITLE" \
     --generate-notes ${ASSETS[@]+"${ASSETS[@]}"} || exit 1
 fi
-phase "release published${ASSETS:+ with ${#ASSETS[@]} asset(s)}"
+phase "🚢 release published${ASSETS:+ with ${#ASSETS[@]} asset(s)}"
 # ASK the release what it holds (fa-ship.sh listed it; the port dropped it). An upload that exited 0
 # is a claim; the asset list GitHub serves back is the outcome. A declared asset it does not hold
 # fails the ship — "published" over a missing tarball is the silent failure this loop exists to stop.
@@ -750,4 +754,4 @@ if [ -n "$skip_reasons" ]; then
 else
   cleanup || echo "⚠ cleanup failed; the release itself is done" >&2
 fi
-phase "done — ${PREFIX}${V} is live"
+phase "🏃🚢 done — ${PREFIX}${V} is live"
