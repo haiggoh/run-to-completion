@@ -361,7 +361,7 @@ cleanup() {  # after a CONFIRMED release: reap the shipped worktree, its branch,
   elif [ -n "$(git -C "$WT" status --porcelain)" ]; then
     echo "⚠ cleanup: kept $WT (the tree is dirty)" >&2
   elif [ -z "$extra" ]; then
-    git worktree remove --force "$WT" && git branch -q -d "$BR" \
+    git worktree remove --force "$WT" && git branch -q -D "$BR" \
       && phase "cleanup: removed worktree $WT and branch $BR"
     if git ls-remote --exit-code --heads origin "$BR" >/dev/null 2>&1; then
       git push -q origin --delete "$BR" && phase "cleanup: deleted origin/$BR"
@@ -397,7 +397,7 @@ cleanup() {  # after a CONFIRMED release: reap the shipped worktree, its branch,
       # Count COPIED files, not listed lines: the log once reported the listed count after a
       # skipped copy, so "backed up N" could name files the backup never held.
       phase "cleanup: backed up $n file(s) to $bk"
-      git worktree remove --force "$WT" && git branch -q -d "$BR" \
+      git worktree remove --force "$WT" && git branch -q -D "$BR" \
         && phase "cleanup: removed worktree $WT (backed up first)"
       if git ls-remote --exit-code --heads origin "$BR" >/dev/null 2>&1; then
         git push -q origin --delete "$BR" && phase "cleanup: deleted origin/$BR"
@@ -406,22 +406,23 @@ cleanup() {  # after a CONFIRMED release: reap the shipped worktree, its branch,
   fi
   # Every OTHER local branch already on the default branch, except one a worktree still has
   # checked out — a concurrent session may be standing in it.
-  # HONEST ACCOUNTING of these two loops (mutated 2026-10-27, one safeguard at a time): the
-  # `in_wt` test is the one that carries the LOCAL sweep, because `git branch -d` already refuses
-  # a branch that is checked out — deleting the in_wt test from THIS loop changes nothing
-  # observable. The `$DEFAULT_BRANCH` test here is structurally unreachable: the ship has already
-  # required $MAIN to be on $DEFAULT_BRANCH, so the default branch is always in $in_wt. Both are
-  # kept as belt-and-braces (they match fa-ship.sh, and they survive a future caller that skips
-  # that precondition), but neither is pinned by a test and nobody should read them as covered.
+  # MERGEDNESS IS DECIDED HERE, against origin, never by `git branch -d`: -d judges against the
+  # branch's upstream, else the CURRENT HEAD of the canonical checkout, and since 1.0.0 that checkout
+  # may be on any branch (the AROUND route). -d then refused the just-shipped branch and left it
+  # behind (found 2026-10-31). So: --merged "$upstream" plus an explicit ancestry check, then -D.
+  # On the AROUND route the default branch is checked out nowhere, so the $DEFAULT_BRANCH skips in
+  # both loops below are LOAD-BEARING and pinned (tests/test_ship_any_checkout.sh, case a): without
+  # them this sweep deletes the local default branch and pushes --delete of origin's.
   for b in $(git for-each-ref --merged "$upstream" --format='%(refname:short)' refs/heads); do
     [ "$b" = "$DEFAULT_BRANCH" ] && continue
     printf '%s\n' "$in_wt" | grep -qx "$b" && continue
-    git branch -q -d "$b" && phase "cleanup: deleted merged branch $b"
+    git merge-base --is-ancestor "$b" "$upstream" || continue
+    git branch -q -D "$b" && phase "cleanup: deleted merged branch $b"
   done
   # And the same for the remote-tracking refs: a merged topic branch left on origin is clutter that
   # `git fetch --prune` will not clean, because it was never deleted there. Here the in_wt test IS
   # load-bearing and IS tested (u3): `git push --delete` knows nothing about local worktrees. The
-  # $DEFAULT_BRANCH test is again unreachable-by-construction, for the reason above.
+  # $DEFAULT_BRANCH test is load-bearing too (see above) and pinned.
   for r in $(git for-each-ref --merged "$upstream" --format='%(refname:lstrip=3)' refs/remotes/origin); do
     case "$r" in "$DEFAULT_BRANCH"|HEAD) continue ;; esac
     printf '%s\n' "$in_wt" | grep -qx "$r" && continue

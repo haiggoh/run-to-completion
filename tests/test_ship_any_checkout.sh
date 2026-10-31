@@ -30,6 +30,17 @@ is "  the tag points at the shipped tip" "$tip" "$(git -C "$D/origin.git" rev-pa
 has "  the release notes come from the SHIPPED changelog" "$(grep '^NOTES-BODY:' "$D/calls")" "second"
 is "  not from the canonical checkout's edit" "0" "$(grep -c 'work in progress' "$D/calls")"
 has "  and the loop recommends the strict rule" "$(cat "$D/out")" '"require_default_branch_checkout": true'
+# On this route the default branch is checked out NOWHERE, so the cleanup sweep's $DEFAULT_BRANCH
+# skips are the only thing between it and `git branch -d main` / `git push origin --delete main`
+# (before 1.0.0 the ship required main checked out, and those skips were unreachable).
+is "  the cleanup sweep keeps the local default branch" "main" "$(branches "$D/main" | grep -x main || echo '')"
+is "  and never deletes the default branch on origin" "$tip" "$(git -C "$D/origin.git" rev-parse --verify -q main || echo gone)"
+is "  the local default branch is brought up to the shipped tip" "$tip" "$(git -C "$D/main" rev-parse main)"
+# `git branch -d` judges "merged" against the upstream, else the CURRENT HEAD — here feature-x — so it
+# refused the shipped branch (and would have masked the default-branch skip above). Cleanup decides
+# mergedness itself against origin, then deletes; the shipped branch must be gone.
+is "  the shipped branch is reaped even though HEAD is another branch" "" "$(branches "$D/main" | grep -x feat/ship || echo '')"
+is "  and the canonical checkout's own branch is kept" "feature-x" "$(branches "$D/main" | grep -x feature-x || echo '')"
 
 # (b) strict TRUE, canonical busy: refused before anything is published
 D="$TMP/b"; rehearse "$D"; set_strict "$D" true; busy_canonical "$D"
