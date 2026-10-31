@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.1
+
+- **Added:** `rtc-ship.sh --bump-versions <worktree-dir> <version>` — rewrites exactly the version
+  surfaces `rtc-ship.json` declares (manifest `"version"` field with indent preserved, a new top
+  CHANGELOG entry in the file's own heading style and idempotent against re-bumps, `version_file`,
+  and the first X.Y.Z in `roadmap`), then runs the version gate and refuses to exit 0 unless all
+  surfaces agree. Malformed versions are refused before anything is written.
+- **Changed:** `--versions-only` stays check-only and writes nothing; new alias `--check-versions`.
+  The bump/check split was observed on free-agents 0.49.3, where the handoff assumed
+  `--versions-only` bumped (waypoint rtc-ship-sh-split-the-version).
+- Tests: `tests/test_rtc_ship.sh` pins both directions — check-only leaves the tree byte-identical,
+  bump writes exactly the declared surfaces and the old changelog entry survives, the gate passes
+  after a bump, and disabling the bump write turns the new tests red (mutation-checked 2026-10-31);
+  `--help` documents both new flags (the dispatch-derived flag test covers them).
+
 ## 1.0.0
 
 run-to-completion is two halves that need each other: skills that run a queue of open work unattended,

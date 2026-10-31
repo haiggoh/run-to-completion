@@ -112,6 +112,38 @@ for key in version_file roadmap; do
   is "  and names it" "1" "$(grep -q "SURFACE is declared but holds no version" "$TMP/e.out" && echo 1 || echo 0)"
 done
 
+# --- --bump-versions writes exactly the declared surfaces; --check-versions writes NOTHING. ---
+# The split (waypoint rtc-ship-sh-split-the-version, observed on free-agents 0.49.3): the check
+# looked like a bump and the handoff assumed it bumped — 4 surfaces stayed hand-edited.
+B="$TMP/bump"; mkdir -p "$B/.claude-plugin"
+printf '{\n  "name": "x",\n  "version": "1.2.3"\n}\n' > "$B/.claude-plugin/plugin.json"
+printf '# Changelog\n\n## 1.2.3\n\n- old entry\n' > "$B/CHANGELOG.md"
+printf '1.2.3\n' > "$B/VERSION"
+printf 'roadmap mentions 1.2.3 here\n' > "$B/ROADMAP.md"
+printf '{"manifest": ".claude-plugin/plugin.json", "changelog": "CHANGELOG.md", "version_file": "VERSION", "roadmap": "ROADMAP.md"}\n' > "$B/rtc-ship.json"
+
+"$ROOT/bin/rtc-ship.sh" --check-versions "$B" >/dev/null 2>&1
+is "--check-versions is an alias of --versions-only on a consistent tree" "$?" "0"
+"$ROOT/bin/rtc-ship.sh" --check-versions "$B" >"$TMP/cv" 2>&1
+is "check-only writes nothing (manifest untouched)" "1.2.3" "$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$B/.claude-plugin/plugin.json")"
+is "check-only writes nothing (changelog untouched)" "1" "$(grep -c '^## 1\.2\.3' "$B/CHANGELOG.md")"
+
+"$ROOT/bin/rtc-ship.sh" --bump-versions "$B" 2.0.0 >"$TMP/bump.out" 2>&1
+is "--bump-versions exits 0 on a declared-surface tree" "$?" "0"
+is "manifest bumped" "2.0.0" "$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$B/.claude-plugin/plugin.json")"
+is "changelog got a new top entry for 2.0.0" "1" "$(grep -c '^## 2\.0\.0' "$B/CHANGELOG.md")"
+is "the old changelog entry is preserved" "1" "$(grep -c '^## 1\.2\.3' "$B/CHANGELOG.md")"
+is "version_file bumped" "2.0.0" "$(tr -d '[:space:]' < "$B/VERSION")"
+is "roadmap first version bumped" "2.0.0" "$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' "$B/ROADMAP.md" | head -1)"
+"$ROOT/bin/rtc-ship.sh" --versions-only "$B" >/dev/null 2>&1
+is "the gate passes after the bump" "$?" "0"
+
+"$ROOT/bin/rtc-ship.sh" --bump-versions "$B" not.a.version >/dev/null 2>&1
+is "a malformed version is refused" "$?" "2"
+is "and wrote nothing" "2.0.0" "$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$B/.claude-plugin/plugin.json")"
+"$ROOT/bin/rtc-ship.sh" --bump-versions "$B" 2.0.0 >/dev/null 2>&1
+is "re-bumping the same version does not duplicate the changelog heading" "1" "$(grep -c '^## 2\.0\.0' "$B/CHANGELOG.md")"
+
 # The default branch is RESOLVED, never assumed: config first, then the remote's own HEAD, then
 # `main`. Asked of the REAL script (--which-config prints what it resolved), in fixture repos —
 # this used to read a sibling checkout on one machine through a copy of the logic.

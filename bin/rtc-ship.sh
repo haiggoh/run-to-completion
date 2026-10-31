@@ -18,6 +18,8 @@
 #   rtc-ship.sh <worktree-dir> <version> "<title>" --no-reap   keep worktree and branches, this ship only
 #   rtc-ship.sh --test-only <worktree-dir>    run the gates and stamp the tree, ship nothing
 #   rtc-ship.sh --versions-only <worktree-dir>  the version gate alone (fast, pre-commit)
+#   rtc-ship.sh --check-versions <worktree-dir>  alias of --versions-only (check-only, writes nothing)
+#   rtc-ship.sh --bump-versions <worktree-dir> <version>  rewrite the declared version surfaces
 #   rtc-ship.sh --which-config                print the config this repo would use and exit
 #   rtc-ship.sh --help
 #
@@ -123,6 +125,68 @@ resolve_default_branch() {  # resolve_default_branch <repo> — config, then ori
   b=$(cfg_get "default_branch" "")
   [ -n "$b" ] || b=$(git -C "$1" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
   printf '%s\n' "${b:-main}"
+}
+
+bump_versions() {  # bump_versions <version> — rewrite EXACTLY the surfaces rtc-ship.json declares
+  # Split from the check on 2026-10-31 (waypoint rtc-ship-sh-split-the-version): --versions-only
+  # verifies and writes nothing; this action writes. Hand-bumping N surfaces is the drift the gate
+  # exists to prevent — the 0.49.3 handoff even assumed --versions-only bumps.
+  local v=$1 top manifest changelog vfile roadmap
+  top=$(resolve_top)
+  manifest=$(cfg_get "manifest" ".claude-plugin/plugin.json")
+  changelog=$(cfg_get "changelog" "CHANGELOG.md")
+  vfile=$(cfg_get "version_file" "")
+  roadmap=$(cfg_get "roadmap" "")
+  python3 - "$top" "$manifest" "$changelog" "$vfile" "$roadmap" "$v" <<'PY'
+import datetime, os, re, sys
+top, manifest, changelog, vfile, roadmap, v = sys.argv[1:7]
+# manifest: first "version" field only, indent preserved — a full json round-trip would reformat
+# the whole file and bury the bump in a whitespace diff.
+mp = os.path.join(top, manifest)
+lines = open(mp).read().splitlines(keepends=True)
+out, done = [], False
+for ln in lines:
+    if not done and '"version"' in ln:
+        ln = re.sub(r'("version"\s*:\s*")[^"]*(")', r'\g<1>' + v + r'\g<2>', ln, count=1)
+        done = True
+    out.append(ln)
+if not done:
+    sys.exit('✖ no "version" field in ' + mp)
+open(mp, "w").write("".join(out))
+print("  %s -> %s" % (manifest, v))
+# changelog: a NEW top entry in the file's own heading style (version, bracket, and date all
+# inherited from the current top heading), unless an entry for v already exists (idempotent).
+cp = os.path.join(top, changelog) if changelog else ""
+if cp and os.path.exists(cp):
+    text = open(cp).read()
+    if not re.search(r'^#+\s+\[?' + re.escape(v) + r'\]?(\s|$)', text, re.M):
+        m = re.search(r'^##+\s.*$', text, re.M)
+        if not m:
+            sys.exit('✖ no numbered heading in ' + cp + ' to copy the style from')
+        newhead = re.sub(r'[0-9]+\.[0-9]+\.[0-9]+', v, m.group(0), count=1)
+        newhead = re.sub(r'20\d\d-\d\d-\d\d', datetime.date.today().isoformat(), newhead)
+        entry = newhead + "\n\n- (release notes go here)\n"
+        ti = re.search(r'^#[^\n]*\n', text, re.M)
+        pos = ti.end() if ti else 0
+        open(cp, "w").write(text[:pos] + "\n" + entry + text[pos:])
+        print("  %s -> new top entry: %s" % (changelog, newhead))
+    else:
+        print("  %s already has a %s entry — not duplicated" % (changelog, v))
+# version_file: declared -> write (create if absent; the gate fails on declared-but-absent)
+if vfile:
+    open(os.path.join(top, vfile), "w").write(v + "\n")
+    print("  %s -> %s" % (vfile, v))
+# roadmap: replace the FIRST X.Y.Z occurrence only — later mentions may be history
+if roadmap:
+    rp = os.path.join(top, roadmap)
+    if os.path.exists(rp):
+        t = open(rp).read()
+        t2, n = re.subn(r'[0-9]+\.[0-9]+\.[0-9]+', v, t, count=1)
+        if n == 0:
+            sys.exit('✖ %s holds no version to replace' % roadmap)
+        open(rp, "w").write(t2)
+        print("  %s -> first version now %s" % (roadmap, v))
+PY
 }
 
 version_gate() {
@@ -469,6 +533,8 @@ case "${1:-}" in
   "") usage >&2; exit 2 ;;
   --test-only) ;;
   --versions-only) ;;
+  --check-versions) ;;
+  --bump-versions) ;;
   --which-config)
     git rev-parse --show-toplevel
     cfg_get "tag_prefix" "(none)"
@@ -485,11 +551,22 @@ if [ "$1" = --test-only ]; then
   if ! version_gate; then echo "✖ version surfaces disagree — see above. Ship will refuse." >&2; exit 1; fi
   gates; exit $?
 fi
-if [ "$1" = --versions-only ]; then
+if [ "$1" = --bump-versions ]; then
+  [ $# -eq 3 ] || { usage >&2; exit 2; }
+  cd "$2"
+  V=$3
+  if ! printf '%s' "$V" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    echo "✖ version '$V' is not a plain X.Y.Z — nothing written" >&2; usage >&2; exit 2
+  fi
+  bump_versions "$V" || { echo "✖ bump failed — fix the surface above and re-run" >&2; exit 1; }
+  if ! version_gate; then echo "✖ version surfaces still disagree after the bump" >&2; exit 1; fi
+  phase "bumped to $V — all declared surfaces agree"; exit 0
+fi
+if [ "$1" = --versions-only ] || [ "$1" = --check-versions ]; then
   [ $# -eq 2 ] || { usage >&2; exit 2; }
   cd "$2"
   # The version gate ALONE — fast enough to run before every commit, and the only part a
-  # hand-rolled ship reliably skips.
+  # hand-rolled ship reliably skips. CHECK-ONLY: writes nothing (pinned by test_rtc_ship.sh).
   if ! version_gate; then echo "✖ version surfaces disagree" >&2; exit 1; fi
   phase "version surfaces agree"; exit 0
 fi
