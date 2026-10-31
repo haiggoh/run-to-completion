@@ -14,7 +14,8 @@
 #   (a) $@OVERRIDE@ — the explicit override. Set but invalid is a HARD ERROR: a typo
 #       must fail loudly rather than silently resolve somewhere else.
 #   (b) the cached answer in $HOME/.cache/haiggoh-shims/@PLUGIN@, reused only while
-#       the registry's mtime is unchanged and the recorded dir still holds a manifest.
+#       the registry's content checksum is unchanged and the recorded dir still holds
+#       a manifest (a checksum, not the mtime — see _reg_key below).
 #   (c) the installPath recorded in installed_plugins.json for @PLUGIN@haiggoh — the
 #       user's chosen first, so statusLine and hooks always run the same version.
 #   (d) the highest semver dir under the plugin cache.
@@ -100,11 +101,11 @@ _resolve() {
     fi
 
     # (b) the cached answer, valid only while the registry has not moved
-    _reg_mtime=$(_reg_key "$REGISTRY")
-    if [ -n "$_reg_mtime" ] && [ -f "$CACHE_FILE" ]; then
-        _cached_mtime=$(awk 'NR==1{print $1}' "$CACHE_FILE" 2>/dev/null)
+    _reg_sum=$(_reg_key "$REGISTRY")
+    if [ -n "$_reg_sum" ] && [ -f "$CACHE_FILE" ]; then
+        _cached_sum=$(awk 'NR==1{print $1}' "$CACHE_FILE" 2>/dev/null)
         _cached_dir=$(awk 'NR==1{print $2}' "$CACHE_FILE" 2>/dev/null)
-        if [ "$_cached_mtime" = "$_reg_mtime" ] && [ -n "$_cached_dir" ] \
+        if [ "$_cached_sum" = "$_reg_sum" ] && [ -n "$_cached_dir" ] \
            && [ -f "$_cached_dir/.claude-plugin/plugin.json" ]; then
             printf '%s\n' "${_cached_dir%/}"
             return 0
@@ -121,8 +122,8 @@ _resolve() {
     fi
 
     # (b) refresh the cache for the next warm call — best effort, never fatal
-    if [ -n "$_reg_mtime" ]; then
-        mkdir -p "$CACHE_ROOT" 2>/dev/null && printf '%s %s\n' "$_reg_mtime" "$_dir" > "$CACHE_FILE" 2>/dev/null
+    if [ -n "$_reg_sum" ]; then
+        mkdir -p "$CACHE_ROOT" 2>/dev/null && printf '%s %s\n' "$_reg_sum" "$_dir" > "$CACHE_FILE" 2>/dev/null
     fi
     printf '%s\n' "$_dir"
 }

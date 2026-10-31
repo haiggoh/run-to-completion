@@ -30,6 +30,15 @@ is "--help prints a usage block" "$(grep -c 'rtc-ship.sh <worktree-dir>' "$TMP/h
 is "--help's first line is the banner, not the shebang" "1" "$(head -1 "$TMP/help" | grep -c 'rtc-ship.sh —')"
 is "--help never prints a '!'-led line" "0" "$(grep -c '^!' "$TMP/help")"
 
+# --help must document EVERY mode flag the dispatcher accepts. --versions-only was handled and
+# absent from the usage block (found 2026-10-31). Flags are DERIVED from the dispatch `case`, so a
+# new mode cannot be added undocumented; an empty extraction is itself a failure.
+flags=$(sed -n '/^case "${1:-}" in/,/^esac/p' "$ROOT/bin/rtc-ship.sh" | grep -oE '^  --[a-z-]+\)' | tr -d ' )')
+is "dispatch flags extracted (non-empty)" "$([ -n "$flags" ] && echo yes)" "yes"
+for f in $flags; do
+  is "--help documents $f" "1" "$([ "$(grep -cw -- "rtc-ship.sh $f" "$TMP/help")" -ge 1 ] && echo 1 || echo 0)"
+done
+
 # --help must document EVERYTHING the script reads. `usage()` used to print a hardcoded line range,
 # so any env var added past line 31 was live and invisible — 0.6.11 shipped its tag-visibility gate
 # exactly that way. Assert the LAST documented env var too, so a range regression fails here.

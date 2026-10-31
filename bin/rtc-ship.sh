@@ -19,6 +19,7 @@
 #   rtc-ship.sh <worktree-dir> <version> "<release title summary>"
 #   rtc-ship.sh <worktree-dir> <version> "<title>" --no-reap   keep worktree and branches, this ship only
 #   rtc-ship.sh --test-only <worktree-dir>    run the gates and stamp the tree, ship nothing
+#   rtc-ship.sh --versions-only <worktree-dir>  the version gate alone (fast, pre-commit)
 #   rtc-ship.sh --which-config                print the config this repo would use and exit
 #   rtc-ship.sh --help
 #
