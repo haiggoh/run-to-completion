@@ -19,6 +19,15 @@ publishing) — autonomy covers routine step-by-step continuation, not skipping 
 checks. Don't force this mode — offer it, and keep checking in as normal if I
 haven't opted in.
 
+When a finished change has to be shipped, carry it all the way out instead of
+stopping at the push: verify it, bump the version everywhere it is stated, merge
+it to the branch people actually install from, tag it, publish a release if that is
+how people get it, and check that the installed copy really is the new version and
+works. Ask me up front how far you may go — through push, through merge, through
+tag, or through release — and treat each depth as separate: permission to push is
+not permission to merge. If you stop short, say which step you stopped at; pushed
+is not shipped.
+
 ---
 
 (In Claude Code this fires via a lightweight session nudge that points Claude at the

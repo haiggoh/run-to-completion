@@ -1,7 +1,7 @@
 {
   "name": "run-to-completion",
   "version": "0.9.6",
-  "description": "🏃 Run a queue of open work to completion unattended: triage it into do-now / heavy / gated tiers, execute the autonomous pile without stopping between items, and close out with a gated list saying why each remaining item was left. Includes an autopilot orchestrator and a narrow attended pass that removes blockers \u2014 ranking them cheapest-to-release first \u2014 without doing the work it releases.",
+  "description": "🏃 Runs a queue of open work to completion unattended and ships each finished change all the way out: triage into do-now / heavy / gated, execute without stopping between items, ship through an integrated tool that merges, tags, releases and verifies the installed copy, and close out with a gated list of what was left and why. Includes an autopilot orchestrator and an attended blocker-clearing pass.",
   "author": {
     "name": "Heiko Brantsch"
   },

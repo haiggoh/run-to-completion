@@ -3,17 +3,15 @@
 # gates, fast-forward merge into that branch, an annotated tag built from the CHANGELOG entry, push,
 # a GitHub release with the repo's distributables, then refresh the installed plugin.
 #
-# "main" IN PROSE MEANS THE DEFAULT BRANCH, whatever it is called. Most repos use `main`; echoprism
-# uses `master`. A request to "merge to main" is resolved to this repo's actual default branch —
-# never to a branch literally named main, and certainly never by CREATING one, which would be a
-# second default and the worst kind of confusion.
+# "main" IN PROSE MEANS THE DEFAULT BRANCH, whatever it is called — `main` in most repos, `master`
+# in some. A request to "merge to main" is resolved to this repo's actual default branch — never to
+# a branch literally named main, and certainly never by CREATING one, which would be a second
+# default and the worst kind of confusion.
 #
-# WHY THIS EXISTS. The ship loop was hand-rolled per repo, and the costliest failure was not a
-# wrong step but a SKIPPED one: the version bump lands after the test suite has already run, so a
-# split is introduced between "tests green" and "PR opened" and only a re-check catches it. Measured
-# 2026-10-24 — free-agents 0.43.2 shipped with VERSION at 0.43.1 while four other surfaces said
-# 0.43.2, because the repo's own version test ran with its verdict discarded. So the gates live here,
-# in one place, and a repo cannot skip them by forgetting to run its own script.
+# WHY THIS EXISTS. A ship loop run by hand fails most often not by a wrong step but by a SKIPPED
+# one: the version bump usually lands after the test suite has run, so the version surfaces can
+# drift apart between "tests green" and the merge, and only a re-check at that point catches it.
+# So the gates live here, in one place, and a repo cannot skip them by forgetting to run them.
 #
 # Usage:
 #   rtc-ship.sh <worktree-dir> <version> "<release title summary>"

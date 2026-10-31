@@ -75,4 +75,16 @@ check $r "README's ✈️ sits on the autopilot row"
 r=0; /usr/bin/grep -qF '**🚢 The ship tool, `rtc-ship.sh`.**' "$ROOT/README.md" || r=1
 check $r "README's 🚢 sits on the ship-tool paragraph"
 
+# 8) 1.0.0 surfaces describe the plugin as it is today (user 2026-10-31): the description covers
+# shipping, the Desktop template carries the ship-depth rule, and --help names no internal repo or
+# dated incident
+r=0; case "$DESC" in *ship*) ;; *) r=1;; esac
+check $r "plugin.json description covers shipping"
+TPL="$ROOT/templates/custom-instructions.md"
+r=0; /usr/bin/grep -q "depth" "$TPL" && /usr/bin/grep -q "merge" "$TPL" || r=1
+check $r "Desktop template carries the ship-depth rule"
+HELP="$("$SHIP" --help)"
+r=0; case "$HELP" in *echoprism*|*"Measured 20"*|*free-agents\ 0.*) r=1;; esac
+check $r "--help names no internal repo or dated incident"
+
 if [ "$fail" = 0 ]; then echo "ALL PASS"; else echo "FAILURES"; exit 1; fi
