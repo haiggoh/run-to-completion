@@ -35,7 +35,7 @@ cfg() {  # cfg <repo> <key> [default]
   python3 -c 'import json,sys
 d=json.load(open(sys.argv[1]))
 v=d.get(sys.argv[2])
-print("" if v is None else v)' "$1/rtc-ship.json" "$2" 2>/dev/null
+print(sys.argv[3] if v is None else v)' "$1/rtc-ship.json" "$2" "${3:-}" 2>/dev/null
 }
 
 audited=0
@@ -88,6 +88,13 @@ done
 # The audit must have SEEN the repos. An empty loop passes every assertion above by never running
 # them, which is how a check like this silently rots: a renamed workspace root turns it into a
 # no-op that still exits 0.
-is "the audit found the repos it is meant to cover (>=5)" "yes" "$([ "$audited" -ge 5 ] && echo yes || echo "no ($audited)")"
+# The audit must have SEEN repos — an empty loop passes every assertion above by never running them.
+# An EXPLICIT RTC_REPOS_ROOT that yields none is a failure (a set-but-wrong override never falls
+# through). The DEFAULT location holding none is another machine's layout: skip, out loud.
+# (2026-10-25 review: a fixed floor of 5 failed every machine with a smaller workspace.)
+if [ "$audited" -eq 0 ] && [ -z "${RTC_REPOS_ROOT:-}" ]; then
+  printf 'skipped: no rtc-ship.json repos under %s (set RTC_REPOS_ROOT to audit elsewhere)\n' "$REPOS"; exit 0
+fi
+is "the audit found repos to cover" "yes" "$([ "$audited" -ge 1 ] && echo yes || echo "no ($audited)")"
 printf '\naudited %d repo(s)\npassed %d, failed %d\n' "$audited" "$pass" "$fail"
 [ "$fail" -eq 0 ]

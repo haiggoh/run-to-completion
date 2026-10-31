@@ -13,7 +13,17 @@ source "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/rehearsal.sh"
 # live" and exited 0 while the installed copy was still 0.6.6, and only a manual retry landed it.
 # fa-ship.sh checked this; the generalization into rtc-ship.sh dropped the check.
 # ---------------------------------------------------------------------------------------------
-D="$TMP/r5"; rehearse "$D"; fake_cache "$D" 0.2.0
+# landing_stub <dir> <tool> — a refresh tool that LANDS: invoked, it writes the published version into
+# the scratch cache. The cache starts OLD, so the success case passes only if the loop really called
+# the tool (2026-10-25 review: the cache used to be pre-filled with the new version, proving nothing).
+landing_stub() {
+  printf '%s\n' '#!/usr/bin/env bash' "printf '$2 %s\\n' \"\$*\" >> \"\$CALLS\"" \
+    'case "$*" in *update*|*apply*) mkdir -p "$RTC_PLUGIN_CACHE/haiggoh/rehearsal/$PUBLISHED_VERSION/.claude-plugin"
+      printf '"'"'{"name":"rehearsal","version":"%s"}\n'"'"' "$PUBLISHED_VERSION" > "$RTC_PLUGIN_CACHE/haiggoh/rehearsal/$PUBLISHED_VERSION/.claude-plugin/plugin.json" ;; esac' \
+    'exit 0' > "$1/bin/$2"
+  chmod +x "$1/bin/$2"
+}
+D="$TMP/r5"; rehearse "$D"; fake_cache "$D" 0.1.0; landing_stub "$D" get-haiggoh
 is "a refresh that moved the version ships" "0" "$(ship "$D" 0.2.0 'second')"
 has "and reports the installed version" "$(cat "$D/out")" "installed"
 
@@ -68,7 +78,7 @@ ship_bare() {  # ship_bare <dir> <version> — the loop with ONLY the stubs and 
       RTC_PLUGIN_CACHE="$d/cache" RTC_TAG_VISIBILITY_DELAY=0 PUBLISHED_VERSION="$2" \
       RTC_SHIP_LOG_DIR="$d/logs" bash "$ROOT/bin/rtc-ship.sh" "$d/wt" "$2" 'second' >"$d/out" 2>&1; echo $? )
 }
-D="$TMP/r11"; rehearse "$D"; rm -f "$D/bin/get-haiggoh"; claude_stub "$D"; fake_cache "$D" 0.2.0
+D="$TMP/r11"; rehearse "$D"; rm -f "$D/bin/get-haiggoh"; landing_stub "$D" claude; fake_cache "$D" 0.1.0
 is "no get-haiggoh: the ship still refreshes and ships" "0" "$(ship_bare "$D" 0.2.0)"
 is "  through 'claude plugin marketplace update haiggoh'" "1" "$(grep -cx 'claude plugin marketplace update haiggoh' "$D/calls")"
 is "  then 'claude plugin update rehearsal@haiggoh'" "1" "$(grep -cx 'claude plugin update rehearsal@haiggoh' "$D/calls")"
