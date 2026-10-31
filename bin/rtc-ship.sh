@@ -609,7 +609,9 @@ fi
 # Both heading styles are accepted (## 1.2.3 and ## [1.2.3]).
 # Notes come from the SHIPPED tree ($TOP), never the canonical checkout, which on the AROUND route
 # holds someone else's branch and edits.
-notes=$(if [ -f "$TOP/CHANGELOG.md" ]; then CHANGELOG_FILE="$TOP/CHANGELOG.md" VERSION="$V" python3 - <<'PYEOF'
+# The CONFIGURED changelog ($door_changelog, the same key the gate reads) — a hardcoded CHANGELOG.md
+# gave a CHANGES.md repo no notes (2026-10-25 review). An empty key = no changelog = generated notes.
+notes=$(if [ -n "$door_changelog" ] && [ -f "$TOP/$door_changelog" ]; then CHANGELOG_FILE="$TOP/$door_changelog" VERSION="$V" python3 - <<'PYEOF'
 import os, re, sys
 path, version = os.environ["CHANGELOG_FILE"], os.environ["VERSION"]
 text = open(path, encoding="utf-8", errors="replace").read()

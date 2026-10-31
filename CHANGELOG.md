@@ -31,13 +31,16 @@ dependable for people other than their author.
   The default-branch skips in both sweeps are now load-bearing and pinned.
 - pytest is found where it is installed (pipx path, PATH, or `python3 -m pytest`), not only at one path.
 - A declared `version_file` or `roadmap` that holds no version fails the gate instead of passing.
+- Release notes come from the configured `changelog` (they were read from a hardcoded `CHANGELOG.md`, so a
+  `CHANGES.md` repo failed to ship).
 - `--help` lists `--versions-only`, names no internal repos or incidents; the shim's comments say what
   its cache is keyed on (a checksum).
 
 ### Tests
 - New: `test_version_consistency.sh` (the repo's own version gate, with a planted-split self-test),
   `test_ship_any_checkout.sh`, `test_ship_cleanup_property.sh` (vanished files were noise or are backed
-  up; local-only branches survive), `test_ship_visibility_remotes.sh`.
+  up; local-only branches survive), `test_ship_visibility_remotes.sh`, `test_ship_changelog_config.sh` (the configured changelog, and the
+  no-changelog path's generated notes).
 - The refresh success path is proven (the cache starts old and only a real refresh moves it); the
   branch-resolution and heading tests ask the real script in fixtures instead of a copied resolver
   reading sibling checkouts; no test writes to the real tree any more.
