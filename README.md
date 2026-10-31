@@ -20,9 +20,9 @@ autonomy is just a script. Together they make "finished" mean the user already h
 
 | Skill | Phase | Owns |
 |---|---|---|
-| `autopilot` | whole run | Entry point for "run everything you can while I'm away." Sequences the three phases below as an explicit checklist, plus the up-front kickoff. |
+| `autopilot` | whole run | Entry point for "run everything you can while I'm away." Sequences the three phases below as an explicit checklist, plus the up-front kickoff, which asks once whether this is a **scoped run** (agreed items and the repositories they may touch) or a **whole-queue run**, and how far the ship loop may go. |
 | `triage-for-autonomy` | before | Scores any queue — a to-do list, an issue tracker, plan steps, a persistent open-items store — into **do-now** / **autonomous-but-heavy** / **gated**, recording a gate reason per blocked item, and ranking the gated pile by how cheaply each one could be released. |
-| `execute-unattended` | during | Keeping moving: wrap-and-switch the instant something needs a human, reversibility before touching a file, and the ship loop that carries a change all the way out — verified, **dogfooded pre-merge** where the delivery mechanism can consume a local checkout, version-bumped, committed, pushed, **merged to the branch consumers actually resolve**, **tagged**, **released** where that is how a consumer obtains it, refreshed in the *installed* copy, and then **dogfooded** there against real state. |
+| `execute-unattended` | during | Keeping moving: wrap-and-switch the instant something needs a human, reversibility before touching a file, useful work while a delegate runs long (never idle polling), a killed or timed-out test suite counted as **unknown, never passing**, and the ship loop that carries a change all the way out — verified, **dogfooded pre-merge** where the delivery mechanism can consume a local checkout, version-bumped, committed, pushed, **merged to the branch consumers actually resolve**, **tagged**, **released** where that is how a consumer obtains it, refreshed in the *installed* copy, and then **dogfooded** there against real state. |
 | `close-out-the-run` | after | Reconcile the durable records the run touched, stop cleanly at the gated boundary instead of churning, and write a wrap whose gated list says why each remaining item was left and how to resume it. |
 | `ungate-queue` | attended | The other half: walks the **blocked** pile *with* you, cheapest gate first, turning each gate reason into the one question that releases it — then **records the answer and stops**. It removes gates; it does not do the work it releases. |
 | `writing-execution-plans` | planning | An additive layer on top of a general plan-writing skill, for plans a **different** executor runs (handoff, successor session, delegated model, unattended run) or that cross permission boundaries or touch live state: authority matrix, forced Phase 0 preflight, receipts with a known-bad discriminant, side-effect classification, adversarial review. It does not restate decomposition or test steps. |
@@ -97,9 +97,27 @@ To make sure the best questions get asked first, the gated pile is not flat:
 | **G4** | a human interacting throughout — no answer releases it | attended work, not ungating |
 | **ENV** | a recurring external precondition (an app open, a network joined) | ask only "is it true now?" — never solvable |
 
+An `ENV` precondition readable from local state may be checked every run; one that
+needs a network call is not, because that is real spend for an answer that is almost
+always no.
+
+Two more kinds of block stay out of the question pile entirely, because no answer from
+you releases them:
+
+- **WAIT** — waiting on another item in the queue. It releases itself, so filing it
+  with the questions would tell you that you owe answers you do not owe. The record
+  names the **milestone** that releases it, which is often not "that item is done".
+- **EXT** — waiting on a third party. This label has to be *earned*: it carries a note
+  of the options under our own control and why each one fails. "Blocked externally"
+  is a conclusion, and it goes stale; without that note it is where items go to die.
+
+A date is not a gate either: scheduled work carries a future date instead of a block.
+
 An item that is *not* gated now but expects a gate later is not on this list at
 all: it is promoted straight into the actionable queue with a note saying where it
-will stop, because work that can proceed should.
+will stop, and the part before the gate is done on purpose. Most gated items are
+ordinary work followed by one question, and skipping the whole item throws away
+progress nobody else will make.
 
 The tier is persisted as a short marker on the front of the gate reason the queue
 already stores — so judging is one-time rather than per-run, there is exactly one
@@ -186,7 +204,14 @@ refresh** (read back and verified) → **cleanup** (reap what shipped — see be
 The gates cannot be skipped by forgetting to run a script — they are *in* it. The version gate
 runs after the rebase and **before the merge**, which is the only place it still means something:
 the version bump usually lands *after* the test suite has run, so the surfaces can drift apart
-between "tests green" and the merge, and only a re-check at that point catches it.
+between "tests green" and the merge, and only a re-check at that point catches it. It prefers the
+repo's own `tests/test_version_consistency.sh` and otherwise compares the surfaces declared in
+`rtc-ship.json`; a surface it cannot read is a **failure**, never a silent pass.
+
+The gates are quick to repeat. `.rtc/pre-flight.sh` runs alongside the main suite rather than
+before it, and a tree that already passed every gate is stamped and skipped on the next run. The
+stamp is keyed on the **working tree**, so an uncommitted edit always runs the suites again, and a
+tree edited while the suites ran is not stamped at all.
 
 Every phase that can fail on its own words — the rebase, `pre-package`, the upload — keeps its full
 output in `RTC_SHIP_LOG_DIR` (default `${TMPDIR:-/tmp}/rtc-ship-logs/<repo>-<version>`) and prints a
@@ -195,11 +220,22 @@ goes to `/dev/null` cannot be judged: "ran quietly" and "died having done nothin
 
 A repo configures the tool with two things, both inside the repo and both committed:
 
-- **`rtc-ship.json`** — data: `tag_prefix` (usually `v`), which version surfaces exist
-  (`version_file`, `roadmap`), asset globs, the plugin to refresh, `default_branch`, and
-  `reap` (set `false` to permanently skip the post-release cleanup — see below).
+- **`rtc-ship.json`** — data: `tag_prefix` (usually `v`), the `manifest` and `changelog`, which
+  other version surfaces exist (`version_file`, `roadmap`), asset globs, the plugin to refresh,
+  `default_branch`, the test command and worker count (`test_cmd`, `test_workers`), and `reap`
+  (set `false` to permanently skip the post-release cleanup — see below).
 - **`.rtc/{pre-flight,pre-package,post-release}.sh`** — commands only that repo has. **Opt-in by
   presence**: a repo with no `.rtc/` directory is fully supported.
+
+A repo with no changelog (a web app with only `package.json`, say) is supported too: leave
+`changelog` empty, the version gate checks the manifest alone and says so, and the release notes
+are generated by GitHub instead of being published empty.
+
+`rtc-ship.sh --help` lists every environment variable the tool reads. The ones you are most likely
+to reach for: `RTC_TEST_WORKERS` (beats `test_workers`), `RTC_SKIP_REFRESH=1`, and
+`RTC_TAG_VISIBILITY=0` for a repo whose install path is not a published manifest, with
+`RTC_TAG_VISIBILITY_TRIES` / `RTC_TAG_VISIBILITY_DELAY` to tune the poll. An invalid worker count
+fails the gate naming where it came from, rather than falling back to the default.
 
 These guards make a *silent* half-ship impossible. Each one exists because its absence once
 produced a release that looked complete and was not:
@@ -208,6 +244,9 @@ produced a release that looked complete and was not:
   and `|| true` used to swallow it, so a release published **with an asset missing** while the loop
   reported success — the worst shape of failure, because nothing looks wrong until someone tries
   to install from it.
+- **A stale asset fails the ship.** A version-bearing asset that does not carry the release
+  version — last release's tarball left behind by a packaging step that did nothing — is refused
+  instead of published. Version-free assets such as install scripts pass.
 - **A failing `.rtc/post-release.sh` fails the ship.** That hook is where a repo verifies the
   refresh it just performed; warning and continuing let a release whose installed copy is still the
   old version print "done — v1.2.3 is live".
@@ -222,7 +261,10 @@ produced a release that looked complete and was not:
   state, so installers can still resolve the previous version while the loop reports success —
   this happened once with a release that was live while the refresh copied nothing. The loop polls
   the published manifest and refuses to create the release until it declares `$V`, leaving a pushed
-  tag and no release, which is clean to redo.
+  tag and no release, which is clean to redo. The same check also works without `get-haiggoh`:
+  `hooks/check-tag-visibility.py <repo-url> <installed-version>` fetches the manifest, diagnoses
+  conflict markers, invalid JSON or a missing version key, and prints a VISIBLE /
+  BROKEN-OR-HIDDEN verdict.
 
 `tests/test_ship_*.sh` rehearse the whole loop — merge, tag, push, release, refresh, cleanup —
 against a **local origin with a stubbed `gh`**, so the irreversible half is covered without
@@ -320,6 +362,11 @@ Because it resolves per call, a plugin update takes effect with **no re-wiring**
 branch switch in a workspace checkout changes nothing live. Re-running is safe: when the
 path already carries the `# haiggoh-shim v1` header it changes nothing. Ask it where it
 resolved with `~/.local/bin/rtc-ship.sh --which`.
+
+The shim looks in a fixed order: `RUN_TO_COMPLETION_PLUGIN` if you set it, then the install path
+Claude Code records for the plugin, then the highest version in the plugin cache. An override that
+is set but points nowhere is an error, never a silent fallback to another copy. Every other
+argument, `--help` included, is passed straight through to the tool.
 
 Anything replaced is copied to `~/.claude/backups/run-to-completion-link-<timestamp>/`
 with its mode preserved, and a plain file this plugin did not write is **refused** rather
