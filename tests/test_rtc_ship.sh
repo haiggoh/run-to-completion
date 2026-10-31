@@ -53,34 +53,40 @@ is "--help prints to the end of the header, not a fixed line range" \
 after=$(md5 -q "$ROOT/CHANGELOG.md" 2>/dev/null || echo x)
 is "--help writes nothing" "$before" "$after"
 
-# --versions-only on THIS repo, which has no VERSION file and no consistency test of its own,
-# so it exercises the declared-surface fallback rather than the repo's own script.
-"$ROOT/bin/rtc-ship.sh" --versions-only "$ROOT" >"$TMP/v" 2>&1
+# The declared-surface FALLBACK, exercised on a scratch copy of this repo's surfaces with no
+# tests/ dir — this repo now has its own tests/test_version_consistency.sh, which the gate prefers,
+# so running against $ROOT would test the other path. The copy also means nothing here ever writes
+# to the real tree (these cases used to edit and restore $ROOT's own plugin.json and CHANGELOG).
+FB="$TMP/fb"; mkdir -p "$FB/.claude-plugin"
+cp "$ROOT/.claude-plugin/plugin.json" "$FB/.claude-plugin/"; cp "$ROOT/CHANGELOG.md" "$ROOT/rtc-ship.json" "$FB/"
+"$ROOT/bin/rtc-ship.sh" --versions-only "$FB" >"$TMP/v" 2>&1
 is "a consistent tree passes the gate" "$?" "0"
 is "the gate reports both surfaces it checked" "$(grep -c 'plugin.json\|CHANGELOG' "$TMP/v")" "2"
 
 # A split must FAIL, and name the offending surface.
-cp "$ROOT/.claude-plugin/plugin.json" "$TMP/plugin.json"
-python3 - "$ROOT/.claude-plugin/plugin.json" <<'PY'
+python3 - "$FB/.claude-plugin/plugin.json" <<'PY'
 import json, sys
 p = sys.argv[1]
 d = json.load(open(p)); d["version"] = "9.9.9"
 open(p, "w").write(json.dumps(d, indent=2) + "\n")
 PY
-"$ROOT/bin/rtc-ship.sh" --versions-only "$ROOT" >"$TMP/split" 2>&1
+"$ROOT/bin/rtc-ship.sh" --versions-only "$FB" >"$TMP/split" 2>&1
 rc=$?
 is "a split fails the gate" "$rc" "1"
 is "the failure names the disagreeing surface" "$(grep -c 'changelog top is' "$TMP/split")" "1"
-cp "$TMP/plugin.json" "$ROOT/.claude-plugin/plugin.json"
+cp "$ROOT/.claude-plugin/plugin.json" "$FB/.claude-plugin/"
 
 # An UNREADABLE changelog must fail too — an empty extraction is a failure, never a pass.
 # (The first run of this script let a planted split through for exactly this reason.)
-cp "$ROOT/CHANGELOG.md" "$TMP/CHANGELOG.md"
-printf '# Changelog\n\nno numbered heading here\n' > "$ROOT/CHANGELOG.md"
-"$ROOT/bin/rtc-ship.sh" --versions-only "$ROOT" >"$TMP/nohdr" 2>&1
+printf '# Changelog\n\nno numbered heading here\n' > "$FB/CHANGELOG.md"
+"$ROOT/bin/rtc-ship.sh" --versions-only "$FB" >"$TMP/nohdr" 2>&1
 is "an unreadable changelog fails the gate" "$?" "1"
 is "and says so rather than passing silently" "$(grep -c 'no numbered heading' "$TMP/nohdr")" "1"
-cp "$TMP/CHANGELOG.md" "$ROOT/CHANGELOG.md"
+
+# And THIS repo, through its own test: consistent passes.
+"$ROOT/bin/rtc-ship.sh" --versions-only "$ROOT" >"$TMP/own" 2>&1
+is "this repo passes the gate through its own consistency test" "$?" "0"
+is "and the gate really used that test" "$(grep -c 'a planted split fails' "$TMP/own")" "1"
 
 # Both heading styles: bracketed (free-agents) and bare (this repo).
 mkdir -p "$TMP/br" "$TMP/bare"
