@@ -19,7 +19,7 @@ is()  { [ "$2" = "$3" ] && ok "$1" || bad "$1" "$2" "$3"; }
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
 # --help must print help and write nothing
-before=$(md5 -q "$ROOT/CHANGELOG.md" 2>/dev/null || echo x)
+before=$(cksum < "$ROOT/CHANGELOG.md")
 "$ROOT/bin/rtc-ship.sh" --help >"$TMP/help" 2>&1
 is "--help exits 0" "$?" "0"
 # Exactly the worktree-taking invocation shapes: the plain one and the --no-reap variant.
@@ -50,7 +50,7 @@ done
 # and the LAST line of the header really is printed (the fixed-range bug's signature)
 is "--help prints to the end of the header, not a fixed line range" \
    "1" "$(grep -c 'RTC_BACKUP_DIR' "$TMP/help")"
-after=$(md5 -q "$ROOT/CHANGELOG.md" 2>/dev/null || echo x)
+after=$(cksum < "$ROOT/CHANGELOG.md")
 is "--help writes nothing" "$before" "$after"
 
 # The declared-surface FALLBACK, exercised on a scratch copy of this repo's surfaces with no
@@ -89,27 +89,53 @@ is "this repo passes the gate through its own consistency test" "$?" "0"
 is "and the gate really used that test" "$(grep -c 'a planted split fails' "$TMP/own")" "1"
 
 # Both heading styles: bracketed (free-agents) and bare (this repo).
-mkdir -p "$TMP/br" "$TMP/bare"
-printf '# Changelog\n\n## [1.2.3]\n\n### Added\n- x\n' > "$TMP/br/CHANGELOG.md"
-printf '# Changelog\n\n## 1.2.3\n\n### Added\n- x\n' > "$TMP/bare/CHANGELOG.md"
-parse_top() { sed -n -E 's/^##+[[:space:]]+\[?([0-9]+\.[0-9]+\.[0-9]+)\]?.*/\1/p' "$1" | head -1; }
-is "a bracketed heading parses" "$(parse_top "$TMP/br/CHANGELOG.md")" "1.2.3"
-is "a bare heading parses" "$(parse_top "$TMP/bare/CHANGELOG.md")" "1.2.3"
+# Both heading styles, through the REAL gate (this used to test a copy of the regex, which a
+# regression in the script would have left green — 2026-10-25 review).
+for style in '## [1.2.3]' '## 1.2.3'; do
+  H="$TMP/h$RANDOM"; mkdir -p "$H/.claude-plugin"
+  printf '{\n  "version": "1.2.3"\n}\n' > "$H/.claude-plugin/plugin.json"
+  printf '# Changelog\n\n%s\n\n### Added\n- x\n' "$style" > "$H/CHANGELOG.md"
+  is "the gate parses a '$style' heading" "0" "$("$ROOT/bin/rtc-ship.sh" --versions-only "$H" >/dev/null 2>&1; echo $?)"
+done
 
-# The default branch is RESOLVED, never assumed. echoprism's is `master`; a hardcoded `main` would
-# mis-ship it. "merge to main" in prose means the default branch, never a branch literally named main.
-resolve_branch() {    # the same three-step resolution the ship path uses
-  local cfg_branch=$1 repo=$2
-  if [ -n "$cfg_branch" ]; then echo "$cfg_branch"; return; fi
-  git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||' || echo main
+# A declared version_file or roadmap that yields NO version is a failure, never a skipped
+# comparison (2026-10-25 review: both used to pass silently).
+for key in version_file roadmap; do
+  E="$TMP/e$RANDOM"; mkdir -p "$E/.claude-plugin"
+  printf '{\n  "version": "1.2.3"\n}\n' > "$E/.claude-plugin/plugin.json"
+  printf '# Changelog\n\n## 1.2.3\n' > "$E/CHANGELOG.md"
+  # empty for version_file (any text would just MISMATCH), versionless prose for a roadmap
+  if [ "$key" = version_file ]; then : > "$E/SURFACE"; else printf 'no version here\n' > "$E/SURFACE"; fi
+  printf '{"%s": "SURFACE"}\n' "$key" > "$E/rtc-ship.json"
+  "$ROOT/bin/rtc-ship.sh" --versions-only "$E" >"$TMP/e.out" 2>&1
+  is "a declared $key with no version FAILS the gate" "$?" "1"
+  is "  and names it" "1" "$(grep -q "SURFACE is declared but holds no version" "$TMP/e.out" && echo 1 || echo 0)"
+done
+
+# The default branch is RESOLVED, never assumed: config first, then the remote's own HEAD, then
+# `main`. Asked of the REAL script (--which-config prints what it resolved), in fixture repos —
+# this used to read a sibling checkout on one machine through a copy of the logic.
+mkrepo() {  # mkrepo <dir> <origin-default> — a clone whose origin/HEAD names <origin-default>
+  git init -q --bare "$1.git"; git -C "$1.git" symbolic-ref HEAD "refs/heads/$2"
+  git init -q -b "$2" "$1"; ( cd "$1" && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+    && git remote add origin "$1.git" && git push -q origin "$2" && git remote set-head origin -a >/dev/null )
 }
-is "a repo whose default is master resolves to master, not main"    "$(resolve_branch "" "$HOME/ClaudeWorkspace/echoprism" 2>/dev/null)" "master"
-is "a repo whose default is main resolves to main"    "$(resolve_branch "" "$ROOT")" "main"
-is "an explicit config key overrides the remote's HEAD"    "$(resolve_branch "trunk" "$ROOT")" "trunk"
+mkrepo "$TMP/rm" master
+is "a repo whose origin default is master resolves to master" "default_branch: master" \
+   "$(cd "$TMP/rm" && "$ROOT/bin/rtc-ship.sh" --which-config | grep '^default_branch:')"
+mkrepo "$TMP/rk" main; printf '{"default_branch": "trunk"}\n' > "$TMP/rk/rtc-ship.json"
+is "an explicit config key overrides the remote's HEAD" "default_branch: trunk" \
+   "$(cd "$TMP/rk" && "$ROOT/bin/rtc-ship.sh" --which-config | grep '^default_branch:')"
+git init -q -b dev "$TMP/rn"
+is "no config and no origin/HEAD falls back to main" "default_branch: main" \
+   "$(cd "$TMP/rn" && "$ROOT/bin/rtc-ship.sh" --which-config | grep '^default_branch:')"
 
-# A repo's own consistency test is preferred over the config fallback.
-is "a repo with its own test still passes" \
-   "$("$ROOT/bin/rtc-ship.sh" --versions-only "$HOME/ClaudeWorkspace/cost-tracker" >/dev/null 2>&1; echo $?)" "0"
+# A repo's own consistency test is preferred over the config fallback: a fixture whose surfaces
+# DISAGREE passes, because its own test (which says yes) is the one consulted.
+O="$TMP/ownrepo"; mkdir -p "$O/.claude-plugin" "$O/tests"
+printf '{\n  "version": "1.0.0"\n}\n' > "$O/.claude-plugin/plugin.json"; printf '# Changelog\n\n## 9.9.9\n' > "$O/CHANGELOG.md"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$O/tests/test_version_consistency.sh"; chmod +x "$O/tests/test_version_consistency.sh"
+is "a repo with its own test is judged by that test" "0" "$("$ROOT/bin/rtc-ship.sh" --versions-only "$O" >/dev/null 2>&1; echo $?)"
 
 # The gate must resolve its repo root even where there is NO git repo. The installed plugin cache
 # is a plain directory, and free-agents' release tarball extracts into one too. `git rev-parse

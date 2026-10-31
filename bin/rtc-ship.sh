@@ -117,6 +117,14 @@ PY
 # point of this script is that the gate cannot be skipped by not running it.
 # ----------------------------------------------------------------------------------------------
 
+resolve_default_branch() {  # resolve_default_branch <repo> — config, then origin/HEAD, then main
+  # ONE resolver for the ship and for --which-config, so the tests can ask the real script.
+  local b
+  b=$(cfg_get "default_branch" "")
+  [ -n "$b" ] || b=$(git -C "$1" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+  printf '%s\n' "${b:-main}"
+}
+
 version_gate() {
   # THE SAME resolver cfg_get uses, and for the same reason: an installed plugin cache is a plain
   # directory with no .git anywhere above it, and so is an extracted release tarball. Letting `git
@@ -158,9 +166,14 @@ version_gate() {
     cv=$mv
   elif [ -z "$cv" ]; then echo "✖ no numbered heading found in $changelog" >&2; bad=1
   elif [ "$cv" != "$mv" ]; then echo "✖ changelog top is $cv, manifest says $mv" >&2; bad=1; fi
+  # A DECLARED surface that yields no version fails like the manifest and changelog do — the same
+  # empty-extraction rule, which these two used to skip (2026-10-25 review).
   if [ -n "$vfile" ] && [ ! -f "$top/$vfile" ]; then echo "✖ $vfile is declared in the config but absent" >&2; bad=1
+  elif [ -n "$vfile" ] && [ -z "$vv" ]; then echo "✖ $vfile is declared but holds no version" >&2; bad=1
   elif [ -n "$vv" ] && [ "$vv" != "$mv" ]; then echo "✖ $vfile says $vv, manifest says $mv" >&2; bad=1; fi
-  if [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && [ -n "$rv" ] && [ "$rv" != "$mv" ]; then
+  if [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && [ -z "$rv" ]; then
+    echo "✖ $roadmap is declared but holds no version" >&2; bad=1
+  elif [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && [ "$rv" != "$mv" ]; then
     echo "✖ $roadmap says $rv, manifest says $mv" >&2; bad=1
   fi
   return "$bad"
@@ -218,7 +231,13 @@ gates() {
     if bash -c "$test_cmd" >"$d/main" 2>&1; then phase "tests (config): pass"
     else phase "✖ tests (config) FAILED"; grep -E "FAIL|✖" "$d/main" | head -10 >&2; rc=1; fi
   else
-    "$HOME/.local/bin/pytest" -q tests -p no:cacheprovider -n "$workers" \
+    # pytest where it is installed: the pipx location first (where this machine's lives), then PATH,
+    # then the active interpreter's module. Never a single hardcoded path (2026-10-25 review).
+    local pyt=()
+    if [ -x "$HOME/.local/bin/pytest" ]; then pyt=("$HOME/.local/bin/pytest")
+    elif command -v pytest >/dev/null 2>&1; then pyt=(pytest)
+    else pyt=(python3 -m pytest); fi
+    "${pyt[@]}" -q tests -p no:cacheprovider -n "$workers" \
       </dev/null >"$d/main" 2>&1 &
     names+=(main); pids+=($!)
   fi
@@ -452,7 +471,9 @@ case "${1:-}" in
   --versions-only) ;;
   --which-config)
     git rev-parse --show-toplevel
-    cfg_get "tag_prefix" "(none)"; exit 0 ;;
+    cfg_get "tag_prefix" "(none)"
+    echo "default_branch: $(resolve_default_branch "$(git rev-parse --show-toplevel)")"
+    exit 0 ;;
   -*) echo "rtc-ship.sh: unrecognised option $1" >&2; usage >&2; exit 2 ;;
 esac
 
@@ -507,12 +528,7 @@ case "$STRICT" in
 esac
 # The default branch is NOT assumed. Config first (echoprism uses `master`), then the remote's own
 # HEAD, and only then `main` — a hardcoded `main` would mis-ship a whole repo.
-DEFAULT_BRANCH=$(cfg_get "default_branch" "")
-if [ -z "$DEFAULT_BRANCH" ]; then
-  DEFAULT_BRANCH=$(git -C "$MAIN" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null \
-                   | sed 's|^origin/||' || true)
-fi
-[ -n "$DEFAULT_BRANCH" ] || DEFAULT_BRANCH=main
+DEFAULT_BRANCH=$(resolve_default_branch "$MAIN")
 SHIP_LOG_DIR=${RTC_SHIP_LOG_DIR:-${TMPDIR:-/tmp}/rtc-ship-logs/$(basename "$MAIN")-$V}
 
 # --- the door check: the version ARGUMENT is the version the tree carries ----------------------

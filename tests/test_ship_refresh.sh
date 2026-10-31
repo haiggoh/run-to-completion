@@ -101,4 +101,14 @@ rc=$(cd "$D/wt" && HOME="$D/home" PF_COUNT="$D/pf.count" CALLS="$D/calls" PATH="
 is "a GATED ship ships" "0" "$rc"
 is "  and runs pre-flight exactly once (not also as a hook)" "1" "$(wc -l < "$D/pf.count" | tr -d ' ')"
 
+# pytest is found where it is installed, not only at the pipx path (2026-10-25 review): no
+# ~/.local/bin/pytest, a pytest on PATH — the gate must use it.
+D="$TMP/r15"; rehearse "$D"; counting_preflight "$D"; mkdir -p "$D/home"
+printf '#!/usr/bin/env bash\necho ran >> "$PYT_COUNT"; echo "1 passed in 0.01s"\n' > "$D/bin/pytest"; chmod +x "$D/bin/pytest"
+rc=$(cd "$D/wt" && HOME="$D/home" PYT_COUNT="$D/pyt.count" PF_COUNT="$D/pf.count" CALLS="$D/calls" PATH="$D/bin:$PATH" \
+       RTC_PLUGIN_CACHE="$D/cache" RTC_TAG_VISIBILITY_DELAY=0 PUBLISHED_VERSION=0.2.0 \
+       bash "$ROOT/bin/rtc-ship.sh" "$D/wt" 0.2.0 'second' >"$D/out" 2>&1; echo $?)
+is "with no ~/.local/bin/pytest, a GATED ship uses the pytest on PATH" "0" "$rc"
+is "  and it really ran" "1" "$(wc -l < "$D/pyt.count" 2>/dev/null | tr -d ' ' || echo 0)"
+
 summary
