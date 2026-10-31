@@ -630,19 +630,32 @@ phase "🚢 merged, tagged ${PREFIX}${V}, pushed"
 # live" while every installer still resolves the previous version. Measured on 0.6.7: exactly that
 # — get-haiggoh read the stale manifest, reported "0.6.6 (current)" and copied nothing, and only a
 # manual retry landed it. The fifth silent-failure class in this loop.
+github_slug() {  # print <owner>/<repo> when origin is a GitHub remote, in ANY of its forms; else nothing
+  # The CONFIGURED url, not `git remote get-url`: get-url applies url.*.insteadOf rewriting, so a user
+  # whose config rewrites https://github.com/ to SSH (common) got the SSH form here — which this
+  # parser used to mangle into `github/<owner>/<repo>` and 404 on every poll (found 2026-10-31; the
+  # rehearsal never noticed because its stub CDN ignored the URL it was asked for).
+  local url
+  url=$(git -C "$MAIN" config --get remote.origin.url 2>/dev/null) || return 0
+  printf '%s\n' "$url" | sed -n -E \
+    -e 's#^(https?://([^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+/[^/]+)$#\3#p' \
+    | sed -e 's#\.git$##' -e 's#/$##'
+}
 published_version() {  # the version the PUBLISHED manifest declares, or "" if it cannot be read
-  local url body owner_repo
-  url=$(git -C "$MAIN" remote get-url origin 2>/dev/null) || return 0
-  owner_repo=$(printf '%s' "$url" | sed -e 's#^git@github.com:#github/#' -e 's#^https://github.com/##' \
-                                        -e 's#^https://##' -e 's#\.git$##')
-  case "$owner_repo" in */*) ;; *) return 0 ;; esac     # a local-path remote: nothing to check
+  local body owner_repo
+  owner_repo=$(github_slug)
+  [ -n "$owner_repo" ] || return 0
   body=$(curl -fsS --max-time 20 \
     "https://raw.githubusercontent.com/$owner_repo/$DEFAULT_BRANCH/$(cfg_get manifest .claude-plugin/plugin.json)" 2>/dev/null) || body=""
   printf '%s' "$body" | sed -n -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1
   return 0
 }
 
-if [ "${RTC_TAG_VISIBILITY:-1}" = 1 ]; then
+if [ "${RTC_TAG_VISIBILITY:-1}" = 1 ] && [ -z "$(github_slug)" ]; then
+  # Not a GitHub remote (another host, a local path): installers do not resolve it through
+  # raw.githubusercontent.com, so this check cannot see what they see. Skip it OUT LOUD.
+  phase "visibility check skipped: origin ($(git -C "$MAIN" config --get remote.origin.url)) is not a GitHub remote"
+elif [ "${RTC_TAG_VISIBILITY:-1}" = 1 ]; then
   vis_tries=0
   while :; do
     got=$(published_version)
