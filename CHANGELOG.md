@@ -1,18 +1,51 @@
 # Changelog
 
-## 0.9.6
+## 1.0.0
 
-### Changed — autopilot gets its own mark ✈️, and the README presents the ship tool as core
+run-to-completion is two halves that need each other: skills that run a queue of open work unattended,
+and an integrated ship tool that carries every finished change all the way out. 1.0.0 makes both
+dependable for people other than their author.
 
-- `autopilot` now leads its first reply with "🏃✈️ autopilot:" — ✈️ is autopilot's own mark, the
-  way 🚢 is the ship tool's. The README shows each mark exactly once, where its thing is
-  introduced: ✈️ on the `autopilot` row, 🚢 on the ship-tool paragraph. `tests/test_branding.sh`
-  pins all of it.
-- README rewritten to describe today's full capabilities: the ship tool as one of the plugin's two
-  core halves (new "Why the ship loop is a tool, not a paragraph"), the shipping section moved
-  ahead of Install, and capabilities it never described — WAIT/EXT blocks, anticipatory gating,
-  the scoped/whole-queue kickoff, the tree stamp, no-changelog repos, the stale-asset guard, the
-  standalone tag-visibility checker and the shim's resolution order.
+### Added
+- **`rtc-ship.sh` ships around a busy canonical checkout.** When the checkout is on another branch or
+  mid-edit, the shipped tip goes to origin by ref (an unforced fast-forward push, refused if origin
+  moved since the rebase), the tag is cut on that tip, notes come from the shipped tree, and the
+  checkout is never touched. A clean checkout on the default branch is fast-forwarded as before.
+- **`"require_default_branch_checkout": true` — the recommended setting.** Opt-in strict mode that
+  refuses to ship unless the canonical checkout is clean on the default branch. Until a repo sets it to
+  `true` or `false`, every ship prints a one-line recommendation; a non-boolean fails at the door.
+- **The refresh works without get-haiggoh.** It falls back to `claude plugin marketplace update` +
+  `claude plugin update <plugin>@<marketplace>` (`refresh_marketplace`, default `haiggoh`); having
+  neither tool fails the ship naming both. The read-back still decides whether the copy moved.
+- **`autopilot` has its own mark, ✈️**: its first reply leads with "🏃✈️ autopilot:", the way the ship
+  tool carries 🚢.
+- `--which-config` prints the resolved `default_branch`.
+- The Desktop / claude.ai template carries the ship loop and its depths.
+
+### Fixed
+- The tag-visibility check failed every ship from an SSH remote (`git@github.com:o/r` became
+  `github/o/r`) and from any non-GitHub or local-path remote. It now reads the configured URL, accepts
+  every GitHub form, and skips other remotes out loud.
+- Cleanup decides "merged" against origin and deletes by explicit ancestry: `git branch -d` judged
+  against the checkout's HEAD and left the shipped branch behind when that HEAD was another branch.
+  The default-branch skips in both sweeps are now load-bearing and pinned.
+- pytest is found where it is installed (pipx path, PATH, or `python3 -m pytest`), not only at one path.
+- A declared `version_file` or `roadmap` that holds no version fails the gate instead of passing.
+- `--help` lists `--versions-only`, names no internal repos or incidents; the shim's comments say what
+  its cache is keyed on (a checksum).
+
+### Tests
+- New: `test_version_consistency.sh` (the repo's own version gate, with a planted-split self-test),
+  `test_ship_any_checkout.sh`, `test_ship_cleanup_property.sh` (vanished files were noise or are backed
+  up; local-only branches survive), `test_ship_visibility_remotes.sh`.
+- The refresh success path is proven (the cache starts old and only a real refresh moves it); the
+  branch-resolution and heading tests ask the real script in fixtures instead of a copied resolver
+  reading sibling checkouts; no test writes to the real tree any more.
+
+### Docs
+- README rewritten to describe today's full capabilities, with the ship tool as a core half and
+  `require_default_branch_checkout` as the recommended setting; every plugin surface describes
+  shipping.
 
 ## 0.9.5
 
