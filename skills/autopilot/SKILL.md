@@ -57,4 +57,4 @@ Use `triage-for-autonomy`, `execute-unattended`, or `close-out-the-run` directly
 
 ## Branding (🏃)
 
-When you begin working under this skill, lead your first substantive reply with "🏃 run-to-completion:" so the user can see which plugin just became active — whichever of the plugin's skills loaded.
+When you begin working under this skill, lead your first substantive reply with "🏃✈️ autopilot:" so the user can see which plugin just became active and that this is an autopilot run — ✈️ is autopilot's own mark, the way 🚢 is the ship tool's.

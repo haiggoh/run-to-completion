@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.6
+
+### Changed — autopilot gets its own mark ✈️, and the README presents the ship tool as core
+
+- `autopilot` now leads its first reply with "🏃✈️ autopilot:" — ✈️ is autopilot's own mark, the
+  way 🚢 is the ship tool's. The README shows each mark exactly once, where its thing is
+  introduced: ✈️ on the `autopilot` row, 🚢 on the ship-tool paragraph. `tests/test_branding.sh`
+  pins all of it.
+- README rewritten to describe today's full capabilities: the ship tool as one of the plugin's two
+  core halves (new "Why the ship loop is a tool, not a paragraph"), the shipping section moved
+  ahead of Install, and capabilities it never described — WAIT/EXT blocks, anticipatory gating,
+  the scoped/whole-queue kickoff, the tree stamp, no-changelog repos, the stale-asset guard, the
+  standalone tag-visibility checker and the shim's resolution order.
+
 ## 0.9.5
 
 ### Fixed — three rtc-ship.sh defects found by the 2026-10-28 free-agents 0.47.0 ship review

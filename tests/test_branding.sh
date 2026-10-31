@@ -60,4 +60,19 @@ for d in "$ROOT"/skills/*/; do
   check $r "$(basename "$d")/SKILL.md carries '## Branding (🏃)'"
 done
 
+# 7) autopilot carries its own mark ✈️ (user 2026-10-31), mirroring the ship tool's 🚢: the skill's
+# first reply leads with both identities, the way the ship finale combines 🏃🚢
+/usr/bin/grep -qF 'lead your first substantive reply with "🏃✈️ autopilot:"' "$ROOT/skills/autopilot/SKILL.md"
+check $? "autopilot leads its first reply with 🏃✈️"
+# and the README shows each sub-mark exactly ONCE, where its thing is introduced
+for mark in "✈️" "🚢"; do
+  N=$(/usr/bin/grep -oF "$mark" "$ROOT/README.md" | wc -l | tr -d ' ')
+  r=0; [ "$N" = "1" ] || r=1
+  check $r "README carries $mark exactly once (got: $N)"
+done
+r=0; /usr/bin/grep -qF '| ✈️ `autopilot` |' "$ROOT/README.md" || r=1
+check $r "README's ✈️ sits on the autopilot row"
+r=0; /usr/bin/grep -qF '**🚢 The ship tool, `rtc-ship.sh`.**' "$ROOT/README.md" || r=1
+check $r "README's 🚢 sits on the ship-tool paragraph"
+
 if [ "$fail" = 0 ]; then echo "ALL PASS"; else echo "FAILURES"; exit 1; fi

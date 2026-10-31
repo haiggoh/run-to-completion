@@ -20,7 +20,7 @@ autonomy is just a script. Together they make "finished" mean the user already h
 
 | Skill | Phase | Owns |
 |---|---|---|
-| `autopilot` | whole run | Entry point for "run everything you can while I'm away." Sequences the three phases below as an explicit checklist, plus the up-front kickoff, which asks once whether this is a **scoped run** (agreed items and the repositories they may touch) or a **whole-queue run**, and how far the ship loop may go. |
+| ✈️ `autopilot` | whole run | Entry point for "run everything you can while I'm away." Sequences the three phases below as an explicit checklist, plus the up-front kickoff, which asks once whether this is a **scoped run** (agreed items and the repositories they may touch) or a **whole-queue run**, and how far the ship loop may go. |
 | `triage-for-autonomy` | before | Scores any queue — a to-do list, an issue tracker, plan steps, a persistent open-items store — into **do-now** / **autonomous-but-heavy** / **gated**, recording a gate reason per blocked item, and ranking the gated pile by how cheaply each one could be released. |
 | `execute-unattended` | during | Keeping moving: wrap-and-switch the instant something needs a human, reversibility before touching a file, useful work while a delegate runs long (never idle polling), a killed or timed-out test suite counted as **unknown, never passing**, and the ship loop that carries a change all the way out — verified, **dogfooded pre-merge** where the delivery mechanism can consume a local checkout, version-bumped, committed, pushed, **merged to the branch consumers actually resolve**, **tagged**, **released** where that is how a consumer obtains it, refreshed in the *installed* copy, and then **dogfooded** there against real state. |
 | `close-out-the-run` | after | Reconcile the durable records the run touched, stop cleanly at the gated boundary instead of churning, and write a wrap whose gated list says why each remaining item was left and how to resume it. |
@@ -28,7 +28,7 @@ autonomy is just a script. Together they make "finished" mean the user already h
 | `writing-execution-plans` | planning | An additive layer on top of a general plan-writing skill, for plans a **different** executor runs (handoff, successor session, delegated model, unattended run) or that cross permission boundaries or touch live state: authority matrix, forced Phase 0 preflight, receipts with a known-bad discriminant, side-effect classification, adversarial review. It does not restate decomposition or test steps. |
 | `run-to-completion` | offer | The original rule, for a plan already in view in the conversation: offer continuous execution, ask blocking matter-of-taste questions up front, fold mid-run prompts in at task seams. |
 
-**The ship tool, `rtc-ship.sh`.** This is the ship loop from `execute-unattended`
+**🚢 The ship tool, `rtc-ship.sh`.** This is the ship loop from `execute-unattended`
 turned into a script that cannot skip a step. One command takes a worktree through
 the version check, rebase, gates, merge, tag, visibility check, release, installed-copy
 refresh and cleanup, and checks the result of each step. See
