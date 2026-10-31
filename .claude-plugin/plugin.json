@@ -1,7 +1,7 @@
 {
   "name": "run-to-completion",
   "version": "0.9.6",
-  "description": "🏃 Runs a queue of open work to completion unattended and ships each finished change all the way out: triage into do-now / heavy / gated, execute without stopping between items, ship through an integrated tool that merges, tags, releases and verifies the installed copy, and close out with a gated list of what was left and why. Includes an autopilot orchestrator and an attended blocker-clearing pass.",
+  "description": "🏃 Runs a queue of open work to completion unattended and ships each finished change all the way out: triage into do-now / heavy / gated, execute without stopping between items, ship through an integrated tool that merges, tags, releases and checks the installed copy, and close out with a gated list of what was left and why. Includes an autopilot orchestrator and an attended blocker-clearing pass.",
   "author": {
     "name": "Heiko Brantsch"
   },
