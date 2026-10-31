@@ -221,7 +221,7 @@ goes to `/dev/null` cannot be judged: "ran quietly" and "died having done nothin
 A repo configures the tool with two things, both inside the repo and both committed:
 
 - **`rtc-ship.json`** — data: `tag_prefix` (usually `v`), the `manifest` and `changelog`, which
-  other version surfaces exist (`version_file`, `roadmap`), asset globs, the plugin to refresh,
+  other version surfaces exist (`version_file`, `roadmap`), asset globs, the plugin to refresh and its marketplace (`refresh_plugin`, `refresh_marketplace`),
   `default_branch`, the test command and worker count (`test_cmd`, `test_workers`), and `reap`
   (set `false` to permanently skip the post-release cleanup — see below).
 - **`.rtc/{pre-flight,pre-package,post-release}.sh`** — commands only that repo has. **Opt-in by
@@ -253,9 +253,10 @@ produced a release that looked complete and was not:
 - **The release is read back.** After the upload, the loop lists the assets GitHub actually holds
   and fails if a declared one is missing — the upload's exit code is a claim, the served list is
   the outcome.
-- **The refresh itself is verified.** The refresh (`get-haiggoh apply`) exits 0 having copied
-  nothing when the manifest it reads is still the old version (a CDN propagation window, a stale
-  marketplace cache), so a green exit code is not proof. The installed version is read back and
+- **The refresh itself is verified.** The refresh uses `get-haiggoh apply` when it is installed and
+  Claude Code's own `claude plugin update` otherwise. Either can exit 0 having copied nothing when
+  the manifest it reads is still the old version (a CDN propagation window, a stale marketplace
+  cache), so a green exit code is not proof. The installed version is read back and
   compared, and a mismatch fails the ship naming both versions.
 - **The tag must be VISIBLE, not merely pushed.** A push returns before the host serves the new
   state, so installers can still resolve the previous version while the loop reports success —
@@ -324,8 +325,8 @@ capability or a free/cheap remote-API lane (or both), delegatable steps route to
 whichever fits, including split across both in parallel when independent items
 are ready together; if you have a reconciliation discipline, the closing phase
 uses it. None of them are required — the skills work on whatever queue you
-already keep, including one they didn't create. The ship tool's one external step
-is the installed-copy refresh, which calls `get-haiggoh`.
+already keep, including one they didn't create. The ship tool's installed-copy refresh
+uses `get-haiggoh` when it is installed and Claude Code's own `claude plugin update` otherwise.
 
 ## Why
 

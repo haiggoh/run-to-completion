@@ -36,6 +36,8 @@
 #   RTC_SKIP_TESTS=1    skip the suite gates (prefer the tree stamp: a green run of THIS tree self-skips)
 #   RTC_TEST_WORKERS    xdist workers for the main suite (beats rtc-ship.json test_workers; default 12)
 #   RTC_SKIP_REFRESH=1  do not refresh the installed plugin after a confirmed release
+#                       (refresh = get-haiggoh when installed, else `claude plugin update`
+#                       against rtc-ship.json's refresh_marketplace, default haiggoh)
 #   RTC_TAG_VISIBILITY=0        skip the published-manifest check (default: on, it gates the release)
 #   RTC_TAG_VISIBILITY_TRIES    polls before giving up (default 6; the CDN window is ~1 minute)
 #   RTC_TAG_VISIBILITY_DELAY    seconds between polls (default 20)
@@ -721,8 +723,24 @@ installed_version() {  # installed_version <plugin> — the version the INSTALLE
 }
 
 PLUGIN=$(cfg_get "refresh_plugin" "")
+MARKETPLACE=$(cfg_get "refresh_marketplace" "haiggoh")
+# refresh_installed — get-haiggoh when it is installed, otherwise Claude Code's own plugin CLI,
+# silently: which tool refreshes is not the user's concern, whether the copy MOVED is, and the
+# read-back below decides that either way. Only having neither tool is an error.
+refresh_installed() {
+  if command -v get-haiggoh >/dev/null 2>&1; then
+    get-haiggoh apply --only "$PLUGIN" 2>&1 | sed 's/^/  /'
+  elif command -v claude >/dev/null 2>&1; then
+    claude plugin marketplace update "$MARKETPLACE" 2>&1 | sed 's/^/  /'
+    claude plugin update "$PLUGIN@$MARKETPLACE" 2>&1 | sed 's/^/  /'
+  else
+    echo "✖ cannot refresh the installed $PLUGIN: neither get-haiggoh nor claude is on PATH" >&2
+    echo "  the release is published but NOT confirmed live; set RTC_SKIP_REFRESH=1 to ship without a refresh" >&2
+    exit 1
+  fi
+}
 if [ -n "$PLUGIN" ] && [ "${RTC_SKIP_REFRESH:-0}" != 1 ]; then
-  get-haiggoh apply --only "$PLUGIN" 2>&1 | sed 's/^/  /' || echo "⚠ refresh failed" >&2
+  refresh_installed
   # VERIFY it moved — invoking is not the same as landing. `get-haiggoh` exits 0 having copied
   # NOTHING when the manifest it reads is still the old version (a raw.githubusercontent.com
   # propagation window, a stale marketplace cache, an unbumped manifest), so a green exit code
@@ -732,7 +750,7 @@ if [ -n "$PLUGIN" ] && [ "${RTC_SKIP_REFRESH:-0}" != 1 ]; then
   got=$(installed_version "$PLUGIN")
   if [ "$got" != "$V" ]; then
     echo "✖ the installed $PLUGIN is at ${got:-<none>}, not $V — the refresh did not land" >&2
-    echo "  re-run once after a short delay (the manifest is served by a CDN), then: get-haiggoh apply --only $PLUGIN" >&2
+    echo "  re-run the refresh once after a short delay (the manifest is served by a CDN)" >&2
     exit 1
   fi
   phase "installed $PLUGIN is $V"
