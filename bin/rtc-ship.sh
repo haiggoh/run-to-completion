@@ -25,6 +25,8 @@
 #   rtc-ship.json   DATA the tool needs: the tag prefix, which version surfaces to check, release
 #                   asset globs, the plugin to refresh, test worker count, and "reap": false to
 #                   permanently keep worktrees and merged branches (reaping is the default).
+#                   "require_default_branch_checkout": true (RECOMMENDED) refuses to ship unless the
+#                   canonical checkout is clean on the default branch; unset, the ship goes around it.
 #   .rtc/*.sh       COMMANDS only that repo has, run at named points if present and executable:
 #                     pre-flight.sh     extra gates, before anything else (a second venv's suite)
 #                     pre-package.sh    build the release assets
@@ -493,6 +495,15 @@ case "$REAP" in
   *) echo "✖ rtc-ship.json: \"reap\": '$REAP' is not a boolean (use true or false) — fix the config" >&2
      exit 2 ;;
 esac
+# The canonical-checkout rule, validated at the door for the same reason. Absent = no choice made
+# yet: ship around whatever state the checkout is in, and recommend the strict rule. true = refuse
+# unless the checkout is clean on the default branch. false = a deliberate choice, never nagged.
+STRICT=$(cfg_get "require_default_branch_checkout" "")
+case "$STRICT" in
+  ""|1|0) : ;;
+  *) echo "✖ rtc-ship.json: \"require_default_branch_checkout\": '$STRICT' is not a boolean (use true or false) — fix the config" >&2
+     exit 2 ;;
+esac
 # The default branch is NOT assumed. Config first (echoprism uses `master`), then the remote's own
 # HEAD, and only then `main` — a hardcoded `main` would mis-ship a whole repo.
 DEFAULT_BRANCH=$(cfg_get "default_branch" "")
@@ -545,16 +556,43 @@ if [ "${RTC_SKIP_TESTS:-0}" != 1 ]; then gates || exit 1
 else hook pre-flight.sh || exit 1; fi
 
 cd "$MAIN"
-[ "$(git branch --show-current)" = "$DEFAULT_BRANCH" ] || { echo "✖ $MAIN not on $DEFAULT_BRANCH" >&2; exit 1; }
-[ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "✖ $MAIN has tracked changes" >&2; exit 1; }
+# Two routes to the same published result. CLASSIC: the canonical checkout is clean on the default
+# branch, so it is fast-forwarded in place. AROUND: it is on another branch or mid-edit — someone's
+# work — so the shipped tip goes to origin by ref and the checkout is never touched. Strict repos
+# refuse the second route instead.
+canon_ready=0
+[ "$(git branch --show-current)" = "$DEFAULT_BRANCH" ] \
+  && [ -z "$(git status --porcelain --untracked-files=no)" ] && canon_ready=1
+if [ "$canon_ready" = 0 ] && [ "$STRICT" = 1 ]; then
+  echo "✖ $MAIN is not clean on $DEFAULT_BRANCH, and rtc-ship.json sets \"require_default_branch_checkout\": true" >&2
+  echo "  switch it back to $DEFAULT_BRANCH and commit or set aside its edits, or set the key to false" >&2
+  exit 1
+fi
+if [ -z "$STRICT" ]; then
+  echo "💡 recommended: add \"require_default_branch_checkout\": true to rtc-ship.json — the ship then refuses" \
+       "unless this checkout is clean on $DEFAULT_BRANCH, so a release never goes out around work in progress." \
+       "Set it to false to keep shipping from any checkout state; either choice silences this note."
+fi
 git fetch -q origin
-git pull -q --ff-only origin "$DEFAULT_BRANCH"
-git merge -q --ff-only "$BR"
+if [ "$canon_ready" = 1 ]; then
+  git pull -q --ff-only origin "$DEFAULT_BRANCH"
+  git merge -q --ff-only "$BR"
+  SHIP_REF=$DEFAULT_BRANCH
+else
+  # Fast-forward only, never forced: origin may have moved since the rebase (a concurrent ship).
+  git merge-base --is-ancestor "origin/$DEFAULT_BRANCH" "$BR" || {
+    echo "✖ origin/$DEFAULT_BRANCH has moved since the rebase — re-run the ship (it rebases first)" >&2
+    exit 1; }
+  SHIP_REF=$BR
+  phase "the canonical checkout is on $(git branch --show-current || echo '?') — shipping around it, untouched"
+fi
 
 # Extracted with python, not an awk program assembled from quoted fragments: the bracket-optional
 # heading form plus an interpolated version made a regex too fragile to trust in shell quoting.
 # Both heading styles are accepted (## 1.2.3 and ## [1.2.3]).
-notes=$(if [ -f CHANGELOG.md ]; then CHANGELOG_FILE=CHANGELOG.md VERSION="$V" python3 - <<'PYEOF'
+# Notes come from the SHIPPED tree ($TOP), never the canonical checkout, which on the AROUND route
+# holds someone else's branch and edits.
+notes=$(if [ -f "$TOP/CHANGELOG.md" ]; then CHANGELOG_FILE="$TOP/CHANGELOG.md" VERSION="$V" python3 - <<'PYEOF'
 import os, re, sys
 path, version = os.environ["CHANGELOG_FILE"], os.environ["VERSION"]
 text = open(path, encoding="utf-8", errors="replace").read()
@@ -573,8 +611,15 @@ PYEOF
 else echo ""; fi)
 git tag -a "${PREFIX}${V}" -m "$(basename "$MAIN") $V — $TITLE
 
-$notes"
-git push -q origin "$DEFAULT_BRANCH" "${PREFIX}${V}"
+$notes" "$SHIP_REF"
+if [ "$SHIP_REF" = "$DEFAULT_BRANCH" ]; then
+  git push -q origin "$DEFAULT_BRANCH" "${PREFIX}${V}"
+else
+  # A plain (unforced) push: git itself refuses anything but a fast-forward of the default branch.
+  git push -q origin "$BR:refs/heads/$DEFAULT_BRANCH" "${PREFIX}${V}" || { echo "✖ push refused" >&2; exit 1; }
+  # Keep the local default-branch ref current when no checkout holds it (fetch refuses if one does).
+  git fetch -q origin "$DEFAULT_BRANCH:$DEFAULT_BRANCH" 2>/dev/null || true
+fi
 phase "🚢 merged, tagged ${PREFIX}${V}, pushed"
 
 # --- the tag must be VISIBLE, not merely pushed ------------------------------------------------

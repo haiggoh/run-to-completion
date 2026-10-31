@@ -222,10 +222,18 @@ A repo configures the tool with two things, both inside the repo and both commit
 
 - **`rtc-ship.json`** — data: `tag_prefix` (usually `v`), the `manifest` and `changelog`, which
   other version surfaces exist (`version_file`, `roadmap`), asset globs, the plugin to refresh and its marketplace (`refresh_plugin`, `refresh_marketplace`),
-  `default_branch`, the test command and worker count (`test_cmd`, `test_workers`), and `reap`
+  `default_branch`, `require_default_branch_checkout` (recommended — see below), the test command and worker count (`test_cmd`, `test_workers`), and `reap`
   (set `false` to permanently skip the post-release cleanup — see below).
 - **`.rtc/{pre-flight,pre-package,post-release}.sh`** — commands only that repo has. **Opt-in by
   presence**: a repo with no `.rtc/` directory is fully supported.
+
+**Recommended: `"require_default_branch_checkout": true`.** With it, the ship refuses unless the
+canonical checkout is clean on the default branch, so a release can never go out around work that is
+in progress there. It is opt-in because repos are run in different ways, and the tool should not
+impose one. Until a repo makes a choice, every ship prints a one-line recommendation; setting the key
+to `true` or `false` silences it. Without strict mode, a checkout that is on another branch or
+mid-edit is never touched: the shipped tip goes to origin by ref (a plain fast-forward push, never
+forced, refused if origin moved since the rebase), and the release notes come from the shipped tree.
 
 A repo with no changelog (a web app with only `package.json`, say) is supported too: leave
 `changelog` empty, the version gate checks the manifest alone and says so, and the release notes

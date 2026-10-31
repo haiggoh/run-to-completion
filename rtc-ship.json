@@ -9,6 +9,7 @@
   "refresh_plugin": "run-to-completion",
   "test_workers": 4,
   "default_branch": "main",
+  "require_default_branch_checkout": true,
   "_comment_tests": "No pytest suite here: the tests are shell suites, so the gate runs them via a declared test_cmd, in parallel (GNU parallel exits with the number of failed jobs; 42s serial -> 32s, 2026-10-28). An UNCOLLECTED suite is a failure, never a pass.",
   "test_cmd": "parallel --will-cite -j 12 bash ::: tests/test_*.sh"
 }
