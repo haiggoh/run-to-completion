@@ -144,6 +144,17 @@ is "and wrote nothing" "2.0.0" "$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$B
 "$ROOT/bin/rtc-ship.sh" --bump-versions "$B" 2.0.0 >/dev/null 2>&1
 is "re-bumping the same version does not duplicate the changelog heading" "1" "$(grep -c '^## 2\.0\.0' "$B/CHANGELOG.md")"
 
+# A changelog with an [Unreleased] section on top must get a VERSIONED entry — the style
+# source may not be the Unreleased heading (council review 2026-10-31).
+U="$TMP/unrel"; mkdir -p "$U/.claude-plugin"
+printf '{\n  "version": "1.0.0"\n}\n' > "$U/.claude-plugin/plugin.json"
+printf '# Changelog\n\n## [Unreleased]\n\n- pending\n\n## [1.0.0] — 2026-10-30\n\n- old\n' > "$U/CHANGELOG.md"
+printf '{}\n' > "$U/rtc-ship.json"
+"$ROOT/bin/rtc-ship.sh" --bump-versions "$U" 1.1.0 >/dev/null 2>&1
+is "bump past an [Unreleased] heading exits 0" "$?" "0"
+is "the new entry is versioned, not a duplicate Unreleased" "1" "$(grep -c '^## \[1\.1\.0\]' "$U/CHANGELOG.md")"
+is "the [Unreleased] section survives" "1" "$(grep -c '^## \[Unreleased\]' "$U/CHANGELOG.md")"
+
 # The default branch is RESOLVED, never assumed: config first, then the remote's own HEAD, then
 # `main`. Asked of the REAL script (--which-config prints what it resolved), in fixture repos —
 # this used to read a sibling checkout on one machine through a copy of the logic.

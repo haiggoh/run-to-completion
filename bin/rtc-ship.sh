@@ -140,6 +140,15 @@ bump_versions() {  # bump_versions <version> — rewrite EXACTLY the surfaces rt
   python3 - "$top" "$manifest" "$changelog" "$vfile" "$roadmap" "$v" <<'PY'
 import datetime, os, re, sys
 top, manifest, changelog, vfile, roadmap, v = sys.argv[1:7]
+
+def write_atomic(path, data):
+    # tmp + os.replace: a crash mid-write must not truncate the surface (council review
+    # 2026-10-31 caught the direct open(...,"w") truncating on failure)
+    tmp = path + ".bump-tmp"
+    with open(tmp, "w") as fh:
+        fh.write(data)
+    os.replace(tmp, path)
+
 # manifest: first "version" field only, indent preserved — a full json round-trip would reformat
 # the whole file and bury the bump in a whitespace diff.
 mp = os.path.join(top, manifest)
@@ -152,15 +161,17 @@ for ln in lines:
     out.append(ln)
 if not done:
     sys.exit('✖ no "version" field in ' + mp)
-open(mp, "w").write("".join(out))
+write_atomic(mp, "".join(out))
 print("  %s -> %s" % (manifest, v))
 # changelog: a NEW top entry in the file's own heading style (version, bracket, and date all
-# inherited from the current top heading), unless an entry for v already exists (idempotent).
+# inherited from the current top VERSIONED heading), unless an entry for v already exists
+# (idempotent). The style source must be a VERSIONED heading — with `## [Unreleased]` on top
+# the old `^##+\s.*$` match copied the word "Unreleased" and produced a versionless entry.
 cp = os.path.join(top, changelog) if changelog else ""
 if cp and os.path.exists(cp):
     text = open(cp).read()
     if not re.search(r'^#+\s+\[?' + re.escape(v) + r'\]?(\s|$)', text, re.M):
-        m = re.search(r'^##+\s.*$', text, re.M)
+        m = re.search(r'^##+\s+\[?[0-9]+\.[0-9]+\.[0-9]+\]?[^\n]*$', text, re.M)
         if not m:
             sys.exit('✖ no numbered heading in ' + cp + ' to copy the style from')
         newhead = re.sub(r'[0-9]+\.[0-9]+\.[0-9]+', v, m.group(0), count=1)
@@ -168,13 +179,13 @@ if cp and os.path.exists(cp):
         entry = newhead + "\n\n- (release notes go here)\n"
         ti = re.search(r'^#[^\n]*\n', text, re.M)
         pos = ti.end() if ti else 0
-        open(cp, "w").write(text[:pos] + "\n" + entry + text[pos:])
+        write_atomic(cp, text[:pos] + "\n" + entry + text[pos:])
         print("  %s -> new top entry: %s" % (changelog, newhead))
     else:
         print("  %s already has a %s entry — not duplicated" % (changelog, v))
 # version_file: declared -> write (create if absent; the gate fails on declared-but-absent)
 if vfile:
-    open(os.path.join(top, vfile), "w").write(v + "\n")
+    write_atomic(os.path.join(top, vfile), v + "\n")
     print("  %s -> %s" % (vfile, v))
 # roadmap: replace the FIRST X.Y.Z occurrence only — later mentions may be history
 if roadmap:
@@ -184,7 +195,7 @@ if roadmap:
         t2, n = re.subn(r'[0-9]+\.[0-9]+\.[0-9]+', v, t, count=1)
         if n == 0:
             sys.exit('✖ %s holds no version to replace' % roadmap)
-        open(rp, "w").write(t2)
+        write_atomic(rp, t2)
         print("  %s -> first version now %s" % (roadmap, v))
 PY
 }

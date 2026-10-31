@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.2] — 2026-10-31 — bump_versions hardened (council review)
+
+- **Fixed:** the changelog style source is now the first VERSIONED heading, not just any
+  `##` heading — with `## [Unreleased]` on top, 1.0.1 copied the word "Unreleased" and
+  produced a versionless entry. The bracket was also made optional in both regexes, which
+  1.0.1 had as required — bare `## 1.2.3` headings then failed the bump outright (caught by
+  the extended test fixture, 6 red -> 60/60 green).
+- **Fixed:** all four surface writes are now tmp-file + `os.replace` (atomic) instead of
+  direct `open(...,"w")`, so a mid-bump crash can no longer truncate a surface to 0 bytes.
+- Tests: `test_rtc_ship.sh` adds an `[Unreleased]`-on-top fixture (new entry must be
+  versioned, Unreleased survives).
+
 ## 1.0.1
 
 - **Added:** `rtc-ship.sh --bump-versions <worktree-dir> <version>` — rewrites exactly the version
