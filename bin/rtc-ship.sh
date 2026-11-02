@@ -172,14 +172,22 @@ if cp and os.path.exists(cp):
     text = open(cp).read()
     if not re.search(r'^#+\s+\[?' + re.escape(v) + r'\]?(\s|$)', text, re.M):
         m = re.search(r'^##+\s+\[?[0-9]+\.[0-9]+\.[0-9]+\]?[^\n]*$', text, re.M)
-        if not m:
-            sys.exit('✖ no numbered heading in ' + cp + ' to copy the style from')
-        newhead = re.sub(r'[0-9]+\.[0-9]+\.[0-9]+', v, m.group(0), count=1)
-        newhead = re.sub(r'20\d\d-\d\d-\d\d', datetime.date.today().isoformat(), newhead)
-        entry = newhead + "\n\n- (release notes go here)\n"
-        ti = re.search(r'^#[^\n]*\n', text, re.M)
-        pos = ti.end() if ti else 0
-        write_atomic(cp, text[:pos] + "\n" + entry + text[pos:])
+        if m:
+            # Insert directly above the previous release entry — correct whether or
+            # not a title/comment block precedes it (the old re.M title search matched
+            # ANY '#' line and could insert mid-file).
+            newhead = re.sub(r'[0-9]+\.[0-9]+\.[0-9]+', v, m.group(0), count=1)
+            newhead = re.sub(r'20\d\d-\d\d-\d\d', datetime.date.today().isoformat(), newhead)
+            entry = newhead + "\n\n- (release notes go here)\n"
+            pos = m.start()
+        else:
+            # First release: no versioned heading yet — insert after the leading
+            # title/comment block (never at an arbitrary mid-file '#' line).
+            newhead = "## [%s] — %s" % (v, datetime.date.today().isoformat())
+            entry = newhead + "\n\n- (release notes go here)\n"
+            lead = re.match(r'(?:[ \t]*\n|#[^\n]*\n|<!--[\s\S]*?-->[^\n]*\n)+', text)
+            pos = lead.end() if lead else 0
+        write_atomic(cp, text[:pos] + entry + ("\n" if pos else "") + text[pos:])
         print("  %s -> new top entry: %s" % (changelog, newhead))
     else:
         print("  %s already has a %s entry — not duplicated" % (changelog, v))
@@ -187,16 +195,24 @@ if cp and os.path.exists(cp):
 if vfile:
     write_atomic(os.path.join(top, vfile), v + "\n")
     print("  %s -> %s" % (vfile, v))
-# roadmap: replace the FIRST X.Y.Z occurrence only — later mentions may be history
+# roadmap: bump the version in the first VERSIONED HEADING — the same line the gate
+# reads — falling back to the first version token for legacy plain-prose roadmaps.
+# Never a historical version mentioned in backticks above the heading.
 if roadmap:
     rp = os.path.join(top, roadmap)
     if os.path.exists(rp):
         t = open(rp).read()
-        t2, n = re.subn(r'[0-9]+\.[0-9]+\.[0-9]+', v, t, count=1)
-        if n == 0:
-            sys.exit('✖ %s holds no version to replace' % roadmap)
-        write_atomic(rp, t2)
-        print("  %s -> first version now %s" % (roadmap, v))
+        m = re.search(r'^##+[ \t]+\[?[0-9]+\.[0-9]+\.[0-9]+\]?[^\n]*$', t, re.M)
+        if m:
+            head = re.sub(r'[0-9]+\.[0-9]+\.[0-9]+', v, m.group(0), count=1)
+            write_atomic(rp, t[:m.start()] + head + t[m.end():])
+            print("  %s -> heading now %s" % (roadmap, head.splitlines()[0]))
+        else:
+            t2, n = re.subn(r'[0-9]+\.[0-9]+\.[0-9]+', v, t, count=1)
+            if n == 0:
+                sys.exit('✖ %s holds no version to replace' % roadmap)
+            write_atomic(rp, t2)
+            print("  %s -> first version now %s" % (roadmap, v))
 PY
 }
 
@@ -224,7 +240,11 @@ version_gate() {
   # CHANGELOG uses the unbracketed form while free-agents' uses brackets.
   cv=$(sed -n -E 's/^##+[[:space:]]+\[?([0-9]+\.[0-9]+\.[0-9]+)\]?.*/\1/p' "$top/$changelog" 2>/dev/null | head -1)
   vv=""; [ -n "$vfile" ] && [ -f "$top/$vfile" ] && vv=$(tr -d '[:space:]' < "$top/$vfile")
-  rv=""; [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && rv=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' "$top/$roadmap" | head -1)
+  # The roadmap surface is the first VERSIONED HEADING, falling back to the first
+  # version-shaped token (legacy plain-prose roadmaps) — prose may mention historical
+  # versions in backticks above the current heading.
+  rv=""; [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && rv=$(sed -n -E 's/^##+[[:space:]]+\[?([0-9]+\.[0-9]+\.[0-9]+)\]?.*/\1/p' "$top/$roadmap" 2>/dev/null | head -1)
+  [ -z "$rv" ] && [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && rv=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' "$top/$roadmap" | head -1)
   echo "  $manifest : ${mv:-<none>}"
   echo "  $changelog (top entry) : ${cv:-<none>}"
   [ -n "$vfile" ] && echo "  $vfile : ${vv:-<none>}"

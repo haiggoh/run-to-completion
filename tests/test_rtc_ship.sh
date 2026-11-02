@@ -155,6 +155,30 @@ is "bump past an [Unreleased] heading exits 0" "$?" "0"
 is "the new entry is versioned, not a duplicate Unreleased" "1" "$(grep -c '^## \[1\.1\.0\]' "$U/CHANGELOG.md")"
 is "the [Unreleased] section survives" "1" "$(grep -c '^## \[Unreleased\]' "$U/CHANGELOG.md")"
 
+# Roadmap surface: bump the first VERSIONED HEADING, never a backticked historical
+# version in the prose above it (waypoint rtc-ship-sh-bump-versions).
+R="$TMP/rmap"; mkdir -p "$R/.claude-plugin"
+printf '{\n  "version": "1.0.0"\n}\n' > "$R/.claude-plugin/plugin.json"
+printf '# Changelog\n\n## 1.0.0\n' > "$R/CHANGELOG.md"
+printf '# Roadmap\n\nsupersedes `0.9.0` (historical)\n\n## 1.0.0 — current\n\n- x\n' > "$R/ROADMAP.md"
+printf '{"roadmap": "ROADMAP.md"}\n' > "$R/rtc-ship.json"
+"$ROOT/bin/rtc-ship.sh" --bump-versions "$R" 2.0.0 >/dev/null 2>&1
+is "roadmap: heading bumped" "1" "$(grep -c '^## 2\.0\.0 — current' "$R/ROADMAP.md")"
+is "roadmap: historical backticked version untouched" "1" "$(grep -c '`0\.9\.0`' "$R/ROADMAP.md")"
+"$ROOT/bin/rtc-ship.sh" --versions-only "$R" >/dev/null 2>&1
+is "gate reads the same heading the bump wrote" "$?" "0"
+
+# Changelog with a leading HTML comment before the title: the new entry must land
+# above the old release and below the title — not at an arbitrary mid-file '#' line
+# (waypoint run-to-completion-bump).
+C2="$TMP/cld2"; mkdir -p "$C2/.claude-plugin"
+printf '{\n  "version": "1.0.0"\n}\n' > "$C2/.claude-plugin/plugin.json"
+printf '<!-- internal -->\n# Changelog\n\n## 1.0.0\n\n- old\n' > "$C2/CHANGELOG.md"
+printf '{}\n' > "$C2/rtc-ship.json"
+"$ROOT/bin/rtc-ship.sh" --bump-versions "$C2" 2.0.0 >/dev/null 2>&1
+is "changelog: new entry directly above the old release" "1" "$(awk '/^## 2\.0\.0/{a=1;next} /^## 1\.0\.0/{if(a) print 1}' "$C2/CHANGELOG.md" | head -1)"
+is "changelog: title still right after the leading comment" "2" "$(grep -n '^# Changelog' "$C2/CHANGELOG.md" | head -1 | cut -d: -f1)"
+
 # The default branch is RESOLVED, never assumed: config first, then the remote's own HEAD, then
 # `main`. Asked of the REAL script (--which-config prints what it resolved), in fixture repos —
 # this used to read a sibling checkout on one machine through a copy of the logic.

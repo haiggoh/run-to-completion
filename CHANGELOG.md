@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.3] — 2026-11-02 — bump_versions edge cases fixed (roadmap heading, changelog placement)
+
+- **Fixed:** the `roadmap` surface now bumps the first VERSIONED HEADING — the same line
+  the version gate reads — instead of the first version-shaped token in the file, so a
+  backticked historical version in the prose can no longer be rewritten (the gate falls
+  back to first-token for legacy plain-prose roadmaps, so bump and check always agree).
+- **Fixed:** the new CHANGELOG entry is inserted directly above the previous release
+  entry (after any title/comment block), never at an arbitrary mid-file `#` line; a
+  changelog with no versioned heading yet (first release) gets the entry after the
+  leading comment block instead of failing.
+- Tests: regression fixtures for both cases in tests/test_rtc_ship.sh (65/65 green).
+
 ## [1.0.2] — 2026-10-31 — bump_versions hardened (council review)
 
 - **Fixed:** the changelog style source is now the first VERSIONED heading, not just any
