@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.4] — 2026-11-03 — bump_versions: one shared roadmap resolver + real-H1 changelog title
+
+- **Fixed:** the `roadmap` surface now resolves through ONE helper (`roadmap_target`) that
+  BOTH the bump and the gate call, so the two can never disagree: a `## Current released
+  version`-style heading wins and the version is read/rewritten inside that section
+  (free-agents docs/ROADMAP.md keeps it in backticks on the line after the heading) —
+  historical versions cited in the preamble can no longer be rewritten (free-agents 0.50.2
+  needed a hand-fix; waypoint run-to-completion-bump). Versioned-heading and first-token
+  fallbacks unchanged.
+- **Fixed:** the changelog's leading title/comment match is now a real H1 (`^#[^#]`), so on a
+  changelog with no `# ` title the new entry lands at the TOP of the file, not after the
+  first `##` heading.
+- Regression fixtures for both layouts in tests/test_rtc_ship.sh, mutation-checked (reverting
+  either fix turns the new assertions red).
+
 ## [1.0.3] — 2026-11-02 — bump_versions edge cases fixed (roadmap heading, changelog placement)
 
 - **Fixed:** the `roadmap` surface now bumps the first VERSIONED HEADING — the same line

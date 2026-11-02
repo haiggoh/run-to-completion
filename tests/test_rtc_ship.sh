@@ -179,6 +179,38 @@ printf '{}\n' > "$C2/rtc-ship.json"
 is "changelog: new entry directly above the old release" "1" "$(awk '/^## 2\.0\.0/{a=1;next} /^## 1\.0\.0/{if(a) print 1}' "$C2/CHANGELOG.md" | head -1)"
 is "changelog: title still right after the leading comment" "2" "$(grep -n '^# Changelog' "$C2/CHANGELOG.md" | head -1 | cut -d: -f1)"
 
+# Roadmap with a '## Current released version' heading whose version sits in BACKTICKS on the
+# line after the heading (free-agents docs/ROADMAP.md layout) and historical versions cited in
+# the preamble prose: bump AND gate must target the backticked line, never the prose
+# (waypoint run-to-completion-bump — free-agents 0.50.2 needed a hand-fix).
+R2="$TMP/rmap2"; mkdir -p "$R2/.claude-plugin"
+printf '{\n  "version": "1.0.0"\n}\n' > "$R2/.claude-plugin/plugin.json"
+printf '# Changelog\n\n## 1.0.0\n' > "$R2/CHANGELOG.md"
+printf '# Roadmap\n\nIt exists because `0.13.0` claimed docs that never landed.\n\n---\n\n## Current released version\n\n`1.0.0`. See CHANGELOG.md.\n\nVersions `0.13.1`-`0.13.5` were consolidated on 2026-09-01.\n' > "$R2/ROADMAP.md"
+printf '{"roadmap": "ROADMAP.md"}\n' > "$R2/rtc-ship.json"
+"$ROOT/bin/rtc-ship.sh" --versions-only "$R2" >/dev/null 2>&1
+is "gate reads the backticked version under 'Current released version'" "$?" "0"
+"$ROOT/bin/rtc-ship.sh" --bump-versions "$R2" 2.0.0 >/dev/null 2>&1
+is "bump exits 0 on the Current-released-version roadmap" "$?" "0"
+is "roadmap: backticked current version bumped" "1" "$(grep -c '^`2\.0\.0`\.' "$R2/ROADMAP.md")"
+is "roadmap: preamble historical version untouched" "1" "$(grep -c '`0\.13\.0`' "$R2/ROADMAP.md")"
+is "roadmap: consolidation prose untouched" "1" "$(grep -c '`0\.13\.1`-`0\.13\.5`' "$R2/ROADMAP.md")"
+is "roadmap: no versioned heading invented" "0" "$(grep -c '^## 2\.0\.0' "$R2/ROADMAP.md")"
+"$ROOT/bin/rtc-ship.sh" --versions-only "$R2" >/dev/null 2>&1
+is "gate passes after the bump (same target)" "$?" "0"
+
+# Changelog with NO '# ' title and versioned headings in a style the versioned-heading regex
+# does not match ('## [v1.0.0]'): the new entry must go to the TOP of the file — the title
+# search must be a real H1 ('^#[^#]'), not any '#' line (waypoint run-to-completion-bump).
+C3="$TMP/cld3"; mkdir -p "$C3/.claude-plugin"
+printf '{\n  "version": "1.0.0"\n}\n' > "$C3/.claude-plugin/plugin.json"
+printf '## [v1.0.0] — 2026-10-30\n\n- old\n' > "$C3/CHANGELOG.md"
+printf '{}\n' > "$C3/rtc-ship.json"
+"$ROOT/bin/rtc-ship.sh" --bump-versions "$C3" 2.0.0 >/dev/null 2>&1
+is "bump exits 0 on a titleless changelog" "$?" "0"
+is "changelog: new entry is the FIRST line, not after the old heading" "1" "$(head -1 "$C3/CHANGELOG.md" | grep -c '^## \[2\.0\.0\]')"
+is "changelog: old v-style heading preserved" "1" "$(grep -c '^## \[v1\.0\.0\]' "$C3/CHANGELOG.md")"
+
 # The default branch is RESOLVED, never assumed: config first, then the remote's own HEAD, then
 # `main`. Asked of the REAL script (--which-config prints what it resolved), in fixture repos —
 # this used to read a sibling checkout on one machine through a copy of the logic.

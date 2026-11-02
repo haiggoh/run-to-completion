@@ -127,6 +127,79 @@ resolve_default_branch() {  # resolve_default_branch <repo> — config, then ori
   printf '%s\n' "${b:-main}"
 }
 
+roadmap_target() {  # roadmap_target <file> read|write [new-version] — the ONE resolver for gate AND bump
+  # The gate and the bump MUST resolve the same target or they drift (waypoint
+  # run-to-completion-bump: on free-agents 0.50.2 two separate implementations disagreed and
+  # the bump rewrote a historical version in the preamble). Resolution order:
+  #   1. a '## Current released version'-style heading: the first version token in its section
+  #      (free-agents docs/ROADMAP.md keeps the version in backticks on the line AFTER the
+  #      heading; the preamble above cites historical versions that must never be rewritten)
+  #   2. else the first VERSIONED heading
+  #   3. else the first version-shaped token (legacy plain-prose roadmaps)
+  # read prints the current version (empty = no target, which the GATE treats as a failure);
+  # write rewrites exactly that occurrence, atomically.
+  python3 - "$@" <<'PY'
+import os, re, sys
+path, mode = sys.argv[1], sys.argv[2]
+newv = sys.argv[3] if len(sys.argv) > 3 else None
+if mode not in ("read", "write") or (mode == "write" and not newv):
+    sys.exit("usage: roadmap_target <file> read|write [new-version]")
+text = open(path).read()
+lines = text.splitlines(keepends=True)
+ver = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+
+def write_atomic(data):
+    tmp = path + ".bump-tmp"
+    with open(tmp, "w") as fh:
+        fh.write(data)
+    os.replace(tmp, path)
+
+# 1) 'Current released version' section — from the heading line up to the next heading
+for i, ln in enumerate(lines):
+    if re.match(r"^##+[ \t]+.*current[ \t]+released[ \t]+version.*$", ln, re.I):
+        end = len(lines)
+        for k in range(i + 1, len(lines)):
+            if re.match(r"^##+", lines[k]):
+                end = k
+                break
+        for j in range(i, end):
+            m = ver.search(lines[j])
+            if m:
+                if mode == "read":
+                    print(m.group(0))
+                else:
+                    lines[j] = lines[j][:m.start()] + newv + lines[j][m.end():]
+                    write_atomic("".join(lines))
+                    print("  current-version line -> %s" % newv)
+                sys.exit(0)
+        # the heading exists but its section holds no version: EMPTY is the answer (the gate
+        # fails on it) — never fall through to a historical token below the section
+        if mode == "read":
+            sys.exit(0)
+        sys.exit('✖ %s: the "current released version" section holds no version' % path)
+# 2) first versioned heading
+m = re.search(r"^##+[ \t]+\[?[0-9]+\.[0-9]+\.[0-9]+\]?[^\n]*$", text, re.M)
+if m:
+    if mode == "read":
+        print(ver.search(m.group(0)).group(0))
+    else:
+        head = ver.sub(newv, m.group(0), count=1)
+        write_atomic(text[:m.start()] + head + text[m.end():])
+        print("  heading -> %s" % head.splitlines()[0])
+    sys.exit(0)
+# 3) legacy plain prose: the first version token anywhere
+m = ver.search(text)
+if mode == "read":
+    if m:
+        print(m.group(0))
+    sys.exit(0)
+if not m:
+    sys.exit("✖ %s holds no version to replace" % path)
+write_atomic(text[:m.start()] + newv + text[m.end():])
+print("  first version -> %s" % newv)
+PY
+}
+
 bump_versions() {  # bump_versions <version> — rewrite EXACTLY the surfaces rtc-ship.json declares
   # Split from the check on 2026-10-31 (waypoint rtc-ship-sh-split-the-version): --versions-only
   # verifies and writes nothing; this action writes. Hand-bumping N surfaces is the drift the gate
@@ -137,9 +210,9 @@ bump_versions() {  # bump_versions <version> — rewrite EXACTLY the surfaces rt
   changelog=$(cfg_get "changelog" "CHANGELOG.md")
   vfile=$(cfg_get "version_file" "")
   roadmap=$(cfg_get "roadmap" "")
-  python3 - "$top" "$manifest" "$changelog" "$vfile" "$roadmap" "$v" <<'PY'
+  python3 - "$top" "$manifest" "$changelog" "$vfile" "$v" <<'PY' || return 1
 import datetime, os, re, sys
-top, manifest, changelog, vfile, roadmap, v = sys.argv[1:7]
+top, manifest, changelog, vfile, v = sys.argv[1:6]
 
 def write_atomic(path, data):
     # tmp + os.replace: a crash mid-write must not truncate the surface (council review
@@ -182,10 +255,13 @@ if cp and os.path.exists(cp):
             pos = m.start()
         else:
             # First release: no versioned heading yet — insert after the leading
-            # title/comment block (never at an arbitrary mid-file '#' line).
+            # title/comment block (never at an arbitrary mid-file '#' line). The title
+            # match must be a REAL H1 — `#[^#]` — so a `## [0.50.1]`-style heading can
+            # never be swallowed into the lead block and the entry land AFTER it
+            # (waypoint run-to-completion-bump).
             newhead = "## [%s] — %s" % (v, datetime.date.today().isoformat())
             entry = newhead + "\n\n- (release notes go here)\n"
-            lead = re.match(r'(?:[ \t]*\n|#[^\n]*\n|<!--[\s\S]*?-->[^\n]*\n)+', text)
+            lead = re.match(r'(?:[ \t]*\n|#[^#\n][^\n]*\n|<!--[\s\S]*?-->[^\n]*\n)+', text)
             pos = lead.end() if lead else 0
         write_atomic(cp, text[:pos] + entry + ("\n" if pos else "") + text[pos:])
         print("  %s -> new top entry: %s" % (changelog, newhead))
@@ -195,25 +271,12 @@ if cp and os.path.exists(cp):
 if vfile:
     write_atomic(os.path.join(top, vfile), v + "\n")
     print("  %s -> %s" % (vfile, v))
-# roadmap: bump the version in the first VERSIONED HEADING — the same line the gate
-# reads — falling back to the first version token for legacy plain-prose roadmaps.
-# Never a historical version mentioned in backticks above the heading.
-if roadmap:
-    rp = os.path.join(top, roadmap)
-    if os.path.exists(rp):
-        t = open(rp).read()
-        m = re.search(r'^##+[ \t]+\[?[0-9]+\.[0-9]+\.[0-9]+\]?[^\n]*$', t, re.M)
-        if m:
-            head = re.sub(r'[0-9]+\.[0-9]+\.[0-9]+', v, m.group(0), count=1)
-            write_atomic(rp, t[:m.start()] + head + t[m.end():])
-            print("  %s -> heading now %s" % (roadmap, head.splitlines()[0]))
-        else:
-            t2, n = re.subn(r'[0-9]+\.[0-9]+\.[0-9]+', v, t, count=1)
-            if n == 0:
-                sys.exit('✖ %s holds no version to replace' % roadmap)
-            write_atomic(rp, t2)
-            print("  %s -> first version now %s" % (roadmap, v))
 PY
+  # roadmap through the ONE shared resolver — the gate reads the very same target, so the
+  # two can never disagree again (waypoint run-to-completion-bump).
+  if [ -n "$roadmap" ] && [ -e "$top/$roadmap" ]; then
+    roadmap_target "$top/$roadmap" write "$v" || return 1
+  fi
 }
 
 version_gate() {
@@ -240,11 +303,11 @@ version_gate() {
   # CHANGELOG uses the unbracketed form while free-agents' uses brackets.
   cv=$(sed -n -E 's/^##+[[:space:]]+\[?([0-9]+\.[0-9]+\.[0-9]+)\]?.*/\1/p' "$top/$changelog" 2>/dev/null | head -1)
   vv=""; [ -n "$vfile" ] && [ -f "$top/$vfile" ] && vv=$(tr -d '[:space:]' < "$top/$vfile")
-  # The roadmap surface is the first VERSIONED HEADING, falling back to the first
-  # version-shaped token (legacy plain-prose roadmaps) — prose may mention historical
-  # versions in backticks above the current heading.
-  rv=""; [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && rv=$(sed -n -E 's/^##+[[:space:]]+\[?([0-9]+\.[0-9]+\.[0-9]+)\]?.*/\1/p' "$top/$roadmap" 2>/dev/null | head -1)
-  [ -z "$rv" ] && [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && rv=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' "$top/$roadmap" | head -1)
+  # The roadmap surface resolves through the SAME helper the bump writes with — 'Current
+  # released version' section first, then first versioned heading, then first token — two
+  # separate implementations drifted apart on free-agents 0.50.2 (waypoint
+  # run-to-completion-bump).
+  rv=""; [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && rv=$(roadmap_target "$top/$roadmap" read)
   echo "  $manifest : ${mv:-<none>}"
   echo "  $changelog (top entry) : ${cv:-<none>}"
   [ -n "$vfile" ] && echo "  $vfile : ${vv:-<none>}"
