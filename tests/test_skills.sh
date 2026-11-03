@@ -237,5 +237,16 @@ check $r "execute-unattended covers the wait for a long-running delegate"
 r=0; grep -qiE 'idle.poll' "$EU" && grep -qiE 'files? the delegate (will not|won.t) touch' "$EU" || r=1
 check $r "it says: no idle-polling, interim work only in files the delegate will not touch"
 
+echo "== Case I: every skill directory is named in the README table =="
+# A skill that exists on disk but is absent from the README is invisible to a reader
+# choosing what to invoke — the table is the inventory, so it must be derived-complete.
+missing=""
+for f in "$SKILLS"/*/; do
+  name="$(basename "$f")"
+  /usr/bin/grep -qF "\`$name\`" "$ROOT/README.md" || missing="$missing $name"
+done
+r=0; [ -z "$missing" ] || r=1
+check $r "every skills/ dir appears in README.md (missing:${missing:- none})"
+
 echo; echo "PASS=$pass FAIL=$fail"
 [ "$fail" -eq 0 ]

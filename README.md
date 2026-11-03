@@ -27,6 +27,8 @@ autonomy is just a script. Together they make "finished" mean the user already h
 | `ungate-queue` | attended | The other half: walks the **blocked** pile *with* you, cheapest gate first, turning each gate reason into the one question that releases it — then **records the answer and stops**. It removes gates; it does not do the work it releases. |
 | `writing-execution-plans` | planning | An additive layer on top of a general plan-writing skill, for plans a **different** executor runs (handoff, successor session, delegated model, unattended run) or that cross permission boundaries or touch live state: authority matrix, forced Phase 0 preflight, receipts with a known-bad discriminant, side-effect classification, adversarial review. It does not restate decomposition or test steps. |
 | `run-to-completion` | offer | The original rule, for a plan already in view in the conversation: offer continuous execution, ask blocking matter-of-taste questions up front, fold mid-run prompts in at task seams. |
+| `ship` | attended | Ship ONE branch of ONE repo now: infers the worktree/branch from the current session (AskUserQuestion only on the default branch with unmerged branches, or outside any repo), derives version and title, then runs `bin/rtc-ship.sh` end to end and relays every phase verdict. For a whole queue unattended use `autopilot`. |
+| `ship-config` | attended | Inspect or change a repo's `rtc-ship.json`: shows what `--which-config` resolves today, asks which key and which value, validates, writes atomically, re-runs the version gate. For shipping a branch use `ship`. |
 
 **🚢 The ship tool, `rtc-ship.sh`.** This is the ship loop from `execute-unattended`
 turned into a script that cannot skip a step. One command takes a worktree through

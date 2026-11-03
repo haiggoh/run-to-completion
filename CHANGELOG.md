@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.0] — 2026-11-03 — /ship and /ship-config skills
+
+- **Added:** `/ship` — ship ONE branch of ONE repo attended: infers the worktree/branch
+  from the current session (AskUserQuestion only when sitting on the default branch with
+  unmerged branches, or outside any repo), derives the version (`X.Y.(Z+1)`) and release
+  title, asks the ship depth once, then runs `bin/rtc-ship.sh` end to end and relays every
+  phase verdict.
+- **Added:** `/ship-config` — inspect/edit a repo's `rtc-ship.json` via AskUserQuestion:
+  shows what `--which-config` resolves today, validates the new value (booleans,
+  integers, repo-relative paths), writes the JSON atomically, re-runs the version gate.
+- **Test:** test_skills.sh Case I — every `skills/` dir must be named in README.md
+  (mutation-checked: hiding a row turns the check red).
+
 ## [1.0.4] — 2026-11-03 — bump_versions: one shared roadmap resolver + real-H1 changelog title
 
 - **Fixed:** the `roadmap` surface now resolves through ONE helper (`roadmap_target`) that
