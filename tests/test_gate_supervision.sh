@@ -58,6 +58,7 @@ chmod +x "$TMP/pf/.rtc/pre-flight.sh"
 stall_gate "$TMP/pf" RTC_STALL_SECONDS=3 RTC_STALL_POLL=1 RTC_STALL_KILL_GRACE=1
 is "the gate's rc is the stall code 124" "124" "$RIG_RC"
 has "the output says STALLED" "$(cat "$TMP/pf/log/out")" "STALLED"
+has "the phase line names the stalled gate" "$(cat "$TMP/pf/log/out")" "pre-flight gates STALLED — diagnosis in"
 diag=$(sed -n 's/^.*diagnosis in //p' "$TMP/pf/log/out" | head -1)
 is "the diagnosis names the label" "STALLED pre-flight gates" "$(head -1 "$diag" 2>/dev/null | cut -d: -f1)"
 
@@ -67,7 +68,35 @@ stub_pytest "$TMP/py" 'exec sleep 300'
 stall_gate "$TMP/py" RTC_STALL_SECONDS=3 RTC_STALL_POLL=1 RTC_STALL_KILL_GRACE=1
 is "the gate's rc is the stall code 124" "124" "$RIG_RC"
 has "the output says STALLED" "$(cat "$TMP/py/log/out")" "STALLED"
+has "the phase line names the stalled gate" "$(cat "$TMP/py/log/out")" "pytest main STALLED — diagnosis in"
 diag=$(sed -n 's/^.*diagnosis in //p' "$TMP/py/log/out" | head -1)
 is "the diagnosis names the label" "STALLED pytest main" "$(head -1 "$diag" 2>/dev/null | cut -d: -f1)"
+
+echo "== the default pytest gate also gets EOF on stdin =="
+mkrepo "$TMP/pys"
+stub_pytest "$TMP/pys" 'read -r x; echo "got=[$x]" > "$GATES_LOG/got-py"; echo "1 passed in 0.01s"'
+mkfifo "$TMP/pys/fifo"
+exec 3<>"$TMP/pys/fifo"
+s=$(date +%s)
+RIG_STDIN="$TMP/pys/fifo" stall_gate "$TMP/pys" RTC_STALL_SECONDS=3 RTC_STALL_POLL=1 RTC_STALL_KILL_GRACE=1
+e=$(date +%s)
+exec 3>&-
+is "the gate passed" "0" "$RIG_RC"
+if [ $((e - s)) -lt 10 ]; then ok "pytest did not block on the held-open stdin ($((e - s)) s)"
+else bad "pytest did not block on the held-open stdin" "< 10 s" "$((e - s)) s"; fi
+is "pytest's stdin was EOF (read got nothing)" "got=[]" "$(cat "$TMP/pys/log/got-py" 2>/dev/null)"
+
+echo "== pre-flight also gets EOF on stdin =="
+mkrepo "$TMP/pfs"
+stub_pytest "$TMP/pfs" 'echo "1 passed in 0.01s"'
+printf '#!/usr/bin/env bash\nread -r x; echo "got=[$x]" > "$GATES_LOG/got-pf"\n' > "$TMP/pfs/.rtc/pre-flight.sh"
+chmod +x "$TMP/pfs/.rtc/pre-flight.sh"
+( cd "$TMP/pfs" && git add -A && git -c user.email=t@t -c user.name=t commit -qm pf )
+mkfifo "$TMP/pfs/fifo"
+exec 3<>"$TMP/pfs/fifo"
+RIG_STDIN="$TMP/pfs/fifo" stall_gate "$TMP/pfs" RTC_STALL_SECONDS=3 RTC_STALL_POLL=1 RTC_STALL_KILL_GRACE=1
+exec 3>&-
+is "the gate passed" "0" "$RIG_RC"
+is "pre-flight's stdin was EOF (read got nothing)" "got=[]" "$(cat "$TMP/pfs/log/got-pf" 2>/dev/null)"
 
 rig_summary

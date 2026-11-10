@@ -32,6 +32,7 @@ if [ $((e - s)) -lt 25 ]; then ok "the stall ended inside the 30 s guard ($((e -
 else bad "the stall ended inside the 30 s guard" "< 25 s" "$((e - s)) s"; fi
 is "the gate's rc is the stall code 124" "124" "$RIG_RC"
 has "rtc-ship's output says STALLED" "$(cat "$TMP/si/log/out")" "STALLED"
+has "the phase line names the stalled gate" "$(cat "$TMP/si/log/out")" "tests (config) STALLED — diagnosis in"
 diag=$(sed -n 's/^.*diagnosis in //p' "$TMP/si/log/out" | head -1)
 if [ -n "$diag" ] && [ -f "$diag" ]; then ok "the printed diagnosis path exists ($diag)"
 else bad "the printed diagnosis path exists" "a real file" "${diag:-<none printed>}"; fi
