@@ -24,7 +24,7 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 unset RTC_STALL_SECONDS RTC_STALL_POLL RTC_STALL_KILL_GRACE RTC_BASELINE
 
 echo "== a stalled gate is named and diagnosed =="
-mkrepo "$TMP/si" '{"tag_prefix":"v","test_cmd":"echo $$ > \"$GATES_LOG/gate-sleep.pid\"; exec sleep 300"}'
+mkrepo "$TMP/si" '{"tag_prefix":"v","test_cmd":"for i in $(seq 1 40); do echo line$i; done; echo $$ > \"$GATES_LOG/gate-sleep.pid\"; exec sleep 300"}'
 s=$(date +%s)
 stall_gate "$TMP/si" RTC_STALL_SECONDS=3 RTC_STALL_POLL=1 RTC_STALL_KILL_GRACE=1
 e=$(date +%s)
@@ -40,6 +40,9 @@ is "its first line names the label" "STALLED tests (config)" \
    "$(head -1 "$diag" 2>/dev/null | cut -d: -f1)"
 has "its body lists the tree's command (comm, never args)" \
     "$(cat "$diag" 2>/dev/null)" "sleep"
+has "the tail keeps the LAST log line (line40)" "$(cat "$diag" 2>/dev/null)" "line40"
+has "  and keeps line11 (exactly 30 lines kept)" "$(cat "$diag" 2>/dev/null)" "line11"
+lacks "  and drops line10" "$(cat "$diag" 2>/dev/null)" "line10"
 spid=$(cat "$TMP/si/log/gate-sleep.pid" 2>/dev/null)
 if [ -n "$spid" ] && kill -0 "$spid" 2>/dev/null; then
   bad "the stalled gate's sleep is dead" "no such process" "still alive (pid $spid)"

@@ -50,4 +50,31 @@ else bad "a zero stall_seconds in rtc-ship.json fails the gate" "rc != 0" "rc=$R
 has "  naming the config key" "$(cat "$TMP/bc/log/out")" "stall_seconds"
 lacks "  and names ONLY the config source (never the env var)" "$(cat "$TMP/bc/log/out")" "RTC_STALL_SECONDS"
 
+echo "== precedence: env beats config — the .stall header prints the RESOLVED window =="
+mkrepo "$TMP/pr" '{"tag_prefix":"v","stall_seconds":600,"test_cmd":"exec sleep 300"}'
+stall_gate "$TMP/pr" RTC_STALL_SECONDS=3 RTC_STALL_POLL=1 RTC_STALL_KILL_GRACE=1
+is "the gate's rc is the stall code 124" "124" "$RIG_RC"
+diag=$(sed -n 's/^.*diagnosis in //p' "$TMP/pr/log/out" | head -1)
+has "the resolved window is the env value" "$(head -1 "$diag" 2>/dev/null)" "for 3s"
+lacks "  and not the config value" "$(head -1 "$diag" 2>/dev/null)" "for 600s"
+
+echo "== a TERM-ignoring gate is still killed (TERM, then KILL escalation) =="
+mkrepo "$TMP/tr" '{"tag_prefix":"v","test_cmd":"./trapper.sh"}'
+cat > "$TMP/tr/trapper.sh" <<'TRAP'
+#!/usr/bin/env bash
+trap '' TERM
+echo $$ > "$GATES_LOG/trap.pid"
+while :; do sleep 1; done
+TRAP
+chmod +x "$TMP/tr/trapper.sh"
+( cd "$TMP/tr" && git add -A && git -c user.email=t@t -c user.name=t commit -qm trap )
+stall_gate "$TMP/tr" RTC_STALL_SECONDS=3 RTC_STALL_POLL=1 RTC_STALL_KILL_GRACE=1
+is "the gate's rc is the stall code 124" "124" "$RIG_RC"
+tpid=$(cat "$TMP/tr/log/trap.pid" 2>/dev/null)
+if [ -n "$tpid" ] && kill -0 "$tpid" 2>/dev/null; then
+  bad "the TERM-ignoring gate was KILLed after the grace" "no such process" "still alive (pid $tpid)"
+else
+  ok "the TERM-ignoring gate was KILLed after the grace"
+fi
+
 rig_summary

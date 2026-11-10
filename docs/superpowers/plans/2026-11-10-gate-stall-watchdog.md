@@ -314,3 +314,44 @@ line that proves the reviewer wrong, and the final green run line.
 5. Confirm: nothing pushed, merged, tagged, released or refreshed; canonical checkout untouched
    (`git -C ~/ClaudeWorkspace/run-to-completion status --porcelain` empty, still on `main`).
 6. **Highest boundary reached: local commits on `feat/gate-stall-watchdog`.** Hand back to the user.
+
+### Delivered 2026-11-10 (executor: GLM 5.3 Flash, free lane)
+
+1. Task 1 `8d15ac2` — detect 13/13, progress 4/4, scope 6/6; mutations (a)(b)(c) RED then restored
+   cmp-identical; full gate 22 files exit 0 (60 s). M1 `3c191a2` (reviewer Nemotron 3 Ultra 550B,
+   nvidia, out-of-family): all 6 requirements PROVEN + 2 strengthenings (rc==124 pin, exclusive
+   source naming), each mutation-checked RED.
+   Task 2 `bd62ee4` — supervision 9/9, test_gates 28/28; gate 23 files exit 0 (64 s). Pre-fix note:
+   the stdin case was already green (POSIX async stdin -> /dev/null); the sharp mutation `<&0` is
+   RED. M2 `115f19c` (StepFun Step 5 Preview, stepfun): concurrency + test_gates PROVEN; stdin-EOF
+   cases added for pytest/pre-flight (`<&0` mutations RED); phase-line label assertions added
+   (label-drop mutation RED).
+   Task 3 `fb8af88` — baseline 13/13; comm-swap mutation RED. M3 `4341649` (Nemotron): R1/R3/R4
+   PROVEN; exact rc==1 pins added; baseline-124-leak mutation RED on both.
+   Task 4 `5ef361f` — README "When a gate stalls", CHANGELOG `## [1.2.0] — 2026-11-10`, bump to
+   1.2.0 (--versions-only agrees; --help RUN shows RTC_STALL_SECONDS / RTC_STALL_POLL /
+   RTC_BASELINE / stall_seconds); gate 24 files exit 0 (77 s). Timing tables (before/after) in the
+   SDD ledger; slowest new file 26 s vs slowest overall 59 s; gate wall 42 s -> 77 s.
+2. Milestones: M1/M2/M3 receipts in the SDD ledger. M4 CLOSED (reviewer Nemotron 3 Ultra 550B, nvidia,
+   out-of-family; envelope /tmp/m4-result.json): 11 claims PROVEN; 3 gaps fixed and mutation-checked —
+   env>config>600 precedence now pinned via the .stall header's resolved window (reversal mutation
+   RED; note: a first attempt at that mutation was itself written backwards and stayed green —
+   redone correctly), "last 30 log lines" pinned with line markers (tail-15 mutation RED), TERM→KILL
+   escalation pinned with a TERM-ignoring trapper (no-KILL-pass mutation RED). Rebutted: RTC_STALL_POLL
+   default value and the RTC_SKIP_TESTS "no longer the workaround" line are tests-only / historical
+   claims, not testable current behavior.
+3. Implemented vs planned: all of Phase 0 and Tasks 1–4. Rulings (ledger): the plan's `9338400` pin
+   was an arithmetic slip (correct 9378400); Task 1 also wires the config path (its tests go through
+   --test-only); 124 dominates mixed runs (user decision); the .stall header carries the label
+   naming while the phase line carries "STALLED — diagnosis in"; the no-argv-leak carrier is
+   `python3 -c` (BSD sleep rejects extra argv); the explicit `</dev/null` is kept as documentation
+   (POSIX async stdin already detaches).
+4. Not verified: the watchdog against a REAL free-agents wedge — only its next ship can show that.
+   Probe for the reviewing session: scratch repo whose rtc-ship.json `test_cmd` is
+   `exec sleep 300`; run `RTC_STALL_SECONDS=3 RTC_STALL_POLL=1 bash bin/rtc-ship.sh --test-only <dir>`
+   → expect rc 124, `STALLED tests (config)` in the output, and a `main.stall` diagnosis.
+5. Confirmed at wrap: no `v1.2*` tags; `origin/main` still `c0763c8` (nothing pushed); canonical
+   checkout `~/ClaudeWorkspace/run-to-completion` clean on `main` (verified read-only); nothing
+   merged, tagged, released or refreshed.
+6. Highest boundary reached: local commits on `feat/gate-stall-watchdog` — 7 commits over `c0763c8`:
+   `8d15ac2 3c191a2 bd62ee4 115f19c fb8af88 4341649 5ef361f`.
