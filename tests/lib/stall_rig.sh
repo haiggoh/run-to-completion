@@ -69,7 +69,7 @@ stall_gate() {  # stall_gate <dir> [env=val...] — run --test-only under the 30
   local d=$1; shift
   mkdir -p "$d/log"
   ( cd "$d" && exec env HOME="$d/home" GATES_LOG="$d/log" "$@" \
-      bash "$ROOT/bin/rtc-ship.sh" --test-only "$d" >"$d/log/out" 2>&1 ) &
+      bash "$ROOT/bin/rtc-ship.sh" --test-only "$d" >"$d/log/out" 2>&1 <"${RIG_STDIN:-/dev/null}" ) &
   RIG_GPID=$!
   STALL_RIG_GROUPS="$STALL_RIG_GROUPS $RIG_GPID"
   ( sleep 30; kill -TERM -- "-$RIG_GPID" 2>/dev/null; sleep 2; kill -KILL -- "-$RIG_GPID" 2>/dev/null ) &

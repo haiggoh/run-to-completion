@@ -506,7 +506,7 @@ gates() {
   # command comes from the config, and an UNCOLLECTED suite is a failure, never a silent pass.
   local test_cmd; test_cmd=$(cfg_get "test_cmd" "")
   if [ -n "$test_cmd" ]; then
-    bash -c "$test_cmd" >"$d/main" 2>&1 &
+    bash -c "$test_cmd" </dev/null >"$d/main" 2>&1 &
     cpid=$!
     if watch_gate "tests (config)" "$d/main" "$cpid"; then phase "tests (config): pass"
     else
@@ -530,11 +530,15 @@ gates() {
       </dev/null >"$d/main" 2>&1 &
     names+=(main); pids+=($!)
   fi
-  local i ok
+  local i
   for i in "${!pids[@]}"; do
-    # wait FIRST, so the log is complete before it is classified.
-    ok=0; wait "${pids[$i]}" && ok=1
-    if [ "$ok" = 0 ]; then
+    # watch_gate waits FIRST, so the log is complete before it is classified; a stall is named
+    # here and resolved to rc 124 at gates()' exit, an ordinary failure classifies as before.
+    wrc=0; watch_gate "pytest ${names[$i]}" "$d/${names[$i]}" "${pids[$i]}" || wrc=$?
+    if [ "$wrc" = 124 ]; then
+      rc=1; stall_seen=1
+      phase "✖ pytest ${names[$i]} STALLED — diagnosis in $d/${names[$i]}.stall"
+    elif [ "$wrc" != 0 ]; then
       rc=1; phase "✖ pytest ${names[$i]} FAILED: $(grep -E 'passed|failed|error' "$d/${names[$i]}" | tail -1)"
       grep -E '^(FAILED|ERROR) ' "$d/${names[$i]}" | head -10 >&2
     elif grep -q "no tests ran" "$d/${names[$i]}"; then
@@ -544,7 +548,11 @@ gates() {
     fi
   done
   if [ -n "$pf_pid" ]; then
-    if wait "$pf_pid"; then phase "pre-flight gates: pass"
+    wrc=0; watch_gate "pre-flight gates" "$d/pre-flight" "$pf_pid" || wrc=$?
+    if [ "$wrc" = 124 ]; then
+      rc=1; stall_seen=1
+      phase "✖ pre-flight gates STALLED — diagnosis in $d/pre-flight.stall"
+    elif [ "$wrc" = 0 ]; then phase "pre-flight gates: pass"
     else rc=1; phase "✖ pre-flight gates FAILED"; tail -30 "$d/pre-flight" >&2; fi
   fi
   # Stamp only the tree that was tested: an edit DURING the run means neither the tree the suites

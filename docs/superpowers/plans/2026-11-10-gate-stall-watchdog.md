@@ -198,7 +198,7 @@ the default pytest path and `.rtc/pre-flight.sh` are supervised the same way (la
 `pre-flight gates`), pre-flight still concurrent with the main suite. A 124 from any gate prints
 `✖ <label> STALLED — diagnosis in <log>.stall` and fails the gate; logs are kept as today.
 
-- [ ] **Step 1: tests:**
+- [x] **Step 1: tests:**
   - `config_gate_stdin_is_dev_null`: run `--test-only` with its OWN stdin held open by a FIFO that nobody writes
     (`mkfifo f; exec 3<>f; rtc-ship.sh --test-only d <f`), `test_cmd = "read -r x; echo got=[$x]"` →
     rc 0 within 10 s, log has `got=[]`.
@@ -206,10 +206,10 @@ the default pytest path and `.rtc/pre-flight.sh` are supervised the same way (la
   - `default_pytest_stall_is_named`: no test_cmd, stub `$HOME/.local/bin/pytest` = `exec sleep 300` →
     `STALLED pytest main`.
   - existing `tests/test_gates.sh` stays green (pre-flight still concurrent).
-- [ ] **Step 2:** run → `config_gate_stdin_is_dev_null` FAILS (blocks until the harness guard) — this is the
+- [x] **Step 2:** run → `config_gate_stdin_is_dev_null` FAILS (blocks until the harness guard) — this is the
       pre-fix reproduction; record it.
-- [ ] **Step 3:** implement; **Step 4:** green + known-bad: remove `</dev/null` from the config path →
-      `config_gate_stdin_is_dev_null` RED. **Step 5:** commit `fix(rtc-ship): gate commands get /dev/null stdin and run under watch_gate`.
+- [x] **Step 3:** implement; **Step 4:** green + known-bad: remove `</dev/null` from the config path →
+      `config_gate_stdin_is_dev_null` RED. **Step 5:** commit `fix(rtc-ship): gate commands get /dev/null stdin and run under watch_gate` (done).
 
 ### Task 3: `RTC_BASELINE=1` — label failures branch-only vs pre-existing
 
