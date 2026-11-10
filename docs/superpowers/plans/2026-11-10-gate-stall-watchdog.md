@@ -222,13 +222,13 @@ failed AND `RTC_BASELINE=1`); extend tests; README + header docs.
 `^(FAILED|ERROR) ` (pytest) or `^  FAIL ` (this repo's shell suites), compared with `comm` on the
 `::`/name part — and removes the worktree in a `trap`. It never changes `rc`.
 
-- [ ] **Step 1: tests** (scratch repo with a bare `origin`, default branch whose `test_cmd` prints
+- [x] **Step 1: tests** (scratch repo with a bare `origin`, default branch whose `test_cmd` prints
       `FAILED t::a` and exits 1; branch prints `FAILED t::a` and `FAILED t::b`):
   - `baseline_reports_but_still_fails`: rc ≠ 0; output has `branch-only:` then `t::b`, and `pre-existing:` then `t::a`.
   - `baseline_off_by_default`: without `RTC_BASELINE`, no `branch-only:` line and no extra worktree.
   - `baseline_leaves_no_worktree`: `git worktree list` count unchanged after the run, also when the baseline
     itself stalls (`RTC_STALL_SECONDS=3`, baseline `test_cmd` sleeps).
-- [ ] **Step 2–5:** red, implement, green + known-bad (swap the `comm` columns → labels reversed → RED), commit
+- [x] **Step 2–5:** red, implement, green + known-bad (swap the `comm` columns → labels reversed → RED), commit
       `feat(rtc-ship): RTC_BASELINE=1 labels failed-gate lines branch-only vs pre-existing`.
 
 ### Task 4: docs, version, full suite

@@ -327,6 +327,11 @@ confirmed release: the release outranks the tidy.
 assumed to be `main` — some repos use `master`, and a hardcoded `main` would mis-ship them. In prose,
 "merge to main" means **this repo's default branch**, never a branch literally named `main`.
 
+When a gate fails, `RTC_BASELINE=1` re-runs that same gate on `origin/<default>` in a throwaway
+worktree and labels the failed test lines `branch-only:` vs `pre-existing:` — diagnosis only: the
+gate still fails, and the worktree is always removed afterwards, even when the baseline run itself
+stalls.
+
 ## Independence
 
 Every skill is written in capability terms and names no other plugin. If you have

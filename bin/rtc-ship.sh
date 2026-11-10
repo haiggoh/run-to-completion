@@ -44,6 +44,9 @@
 #                       and failed as STALLED (default 600; rtc-ship.json "stall_seconds" sits
 #                       between this env var and the default in precedence)
 #   RTC_STALL_POLL      (tests only) seconds between the watchdog's stall samples (default 15)
+#   RTC_BASELINE=1      after a failed gate, re-run that gate on origin/<default> in a throwaway
+#                       worktree and label its failed lines branch-only vs pre-existing
+#                       (diagnosis only — the gate still fails)
 #   RTC_SKIP_REFRESH=1  do not refresh the installed plugin after a confirmed release
 #                       (refresh = get-haiggoh when installed, else `claude plugin update`
 #                       against rtc-ship.json's refresh_marketplace, default haiggoh)
@@ -196,6 +199,57 @@ watch_gate() {  # watch_gate <label> <log> <pid> — wait for the gate command; 
     last_size=$size; last_cpu=$cpu
     sleep "$poll"
   done
+}
+
+_gate_fail_keys() {  # _gate_fail_keys <log> — the test keys of FAILED/ERROR (pytest) and "  FAIL " lines
+  { grep -E '^(FAILED|ERROR) ' "$1" 2>/dev/null || :; } | awk '{print $2}'
+  { grep -E '^  FAIL ' "$1" 2>/dev/null || :; } | sed 's/^  FAIL //'
+}
+
+baseline_classify() {  # baseline_classify <label> <failed-log> — RTC_BASELINE=1 only: re-run the
+                       # failed gate on origin/<default> in a throwaway worktree under watch_gate,
+                       # then label the failed lines branch-only vs pre-existing. Diagnosis only —
+                       # never changes rc; the worktree is removed (also by trap) when done.
+  local label=$1 failed=$2 top def tmp wt bl kf kb old_trap bcmd bpid wrc2
+  top=$(git rev-parse --show-toplevel)
+  def=$(resolve_default_branch "$top")
+  tmp=$(mktemp -d) || return 0
+  wt="$tmp/wt"
+  if ! git -C "$top" worktree add --detach "$wt" "origin/$def" >/dev/null 2>&1; then
+    phase "baseline: cannot create a worktree at origin/$def — labels skipped"
+    rm -rf "$tmp"
+    return 0
+  fi
+  old_trap=$(trap -p EXIT)
+  trap 'git -C "$top" worktree remove --force "$wt" >/dev/null 2>&1; rm -rf "$tmp"' EXIT
+  bl="$tmp/baseline.log"
+  phase "baseline: re-running '$label' on origin/$def"
+  bcmd=""
+  case "$label" in
+    "tests (config)") bcmd=$(RTC_REPO_ROOT="$wt" cfg_get "test_cmd" "") ;;
+    "pytest main")
+      if [ -x "$HOME/.local/bin/pytest" ]; then bcmd="$HOME/.local/bin/pytest -q tests -p no:cacheprovider"
+      elif command -v pytest >/dev/null 2>&1; then bcmd="pytest -q tests -p no:cacheprovider"
+      else bcmd="python3 -m pytest -q tests -p no:cacheprovider"; fi ;;
+    "pre-flight gates") if [ -x "$wt/.rtc/pre-flight.sh" ]; then bcmd="./.rtc/pre-flight.sh"; fi ;;
+  esac
+  if [ -n "$bcmd" ]; then
+    ( cd "$wt" && bash -c "$bcmd" </dev/null >"$bl" 2>&1 ) &
+    bpid=$!
+    wrc2=0; watch_gate "baseline" "$bl" "$bpid" || wrc2=$?
+    if [ "$wrc2" = 124 ]; then phase "baseline: also STALLED on origin/$def — diagnosis in $bl.stall"; fi
+  fi
+  kf="$tmp/branch.keys"; kb="$tmp/base.keys"
+  _gate_fail_keys "$failed" | sort -u >"$kf"
+  _gate_fail_keys "$bl" 2>/dev/null | sort -u >"$kb"
+  echo "branch-only:"
+  comm -23 "$kf" "$kb" | sed 's/^/  /'
+  echo "pre-existing:"
+  comm -12 "$kf" "$kb" | sed 's/^/  /'
+  git -C "$top" worktree remove --force "$wt" >/dev/null 2>&1
+  rm -rf "$tmp"
+  if [ -n "$old_trap" ]; then eval "$old_trap"; else trap - EXIT; fi
+  return 0
 }
 
 # ----------------------------------------------------------------------------------------------
@@ -473,7 +527,7 @@ worktree_tree() {  # the tree id of what the suites will actually read: the WORK
 
 gates() {
   local tree stamp d rc=0 pids=() names=() out
-  local stall_seen=0 wrc cpid
+  local stall_seen=0 wrc cpid failed_label="" failed_log=""
   tree=$(worktree_tree) || { echo "✖ could not hash the working tree for the test stamp" >&2; return 1; }
   stamp="$(git rev-parse --git-common-dir)/rtc-tested/$tree"
   if [ -e "$stamp" ]; then
@@ -512,10 +566,10 @@ gates() {
     else
       wrc=$?
       if [ "$wrc" = 124 ]; then
-        rc=1; stall_seen=1
+        rc=1; stall_seen=1; failed_label="tests (config)"; failed_log="$d/main"
         phase "✖ tests (config) STALLED — diagnosis in $d/main.stall"
       else
-        rc=1
+        rc=1; failed_label="tests (config)"; failed_log="$d/main"
         phase "✖ tests (config) FAILED"; grep -E "FAIL|✖" "$d/main" | head -10 >&2
       fi
     fi
@@ -536,10 +590,11 @@ gates() {
     # here and resolved to rc 124 at gates()' exit, an ordinary failure classifies as before.
     wrc=0; watch_gate "pytest ${names[$i]}" "$d/${names[$i]}" "${pids[$i]}" || wrc=$?
     if [ "$wrc" = 124 ]; then
-      rc=1; stall_seen=1
+      rc=1; stall_seen=1; failed_label="pytest ${names[$i]}"; failed_log="$d/${names[$i]}"
       phase "✖ pytest ${names[$i]} STALLED — diagnosis in $d/${names[$i]}.stall"
     elif [ "$wrc" != 0 ]; then
-      rc=1; phase "✖ pytest ${names[$i]} FAILED: $(grep -E 'passed|failed|error' "$d/${names[$i]}" | tail -1)"
+      rc=1; failed_label="pytest ${names[$i]}"; failed_log="$d/${names[$i]}"
+      phase "✖ pytest ${names[$i]} FAILED: $(grep -E 'passed|failed|error' "$d/${names[$i]}" | tail -1)"
       grep -E '^(FAILED|ERROR) ' "$d/${names[$i]}" | head -10 >&2
     elif grep -q "no tests ran" "$d/${names[$i]}"; then
       rc=1; phase "✖ pytest ${names[$i]} collected NO tests — declare a test_cmd in rtc-ship.json"
@@ -550,10 +605,16 @@ gates() {
   if [ -n "$pf_pid" ]; then
     wrc=0; watch_gate "pre-flight gates" "$d/pre-flight" "$pf_pid" || wrc=$?
     if [ "$wrc" = 124 ]; then
-      rc=1; stall_seen=1
+      rc=1; stall_seen=1; failed_label="pre-flight gates"; failed_log="$d/pre-flight"
       phase "✖ pre-flight gates STALLED — diagnosis in $d/pre-flight.stall"
     elif [ "$wrc" = 0 ]; then phase "pre-flight gates: pass"
-    else rc=1; phase "✖ pre-flight gates FAILED"; tail -30 "$d/pre-flight" >&2; fi
+    else rc=1; failed_label="pre-flight gates"; failed_log="$d/pre-flight"
+         phase "✖ pre-flight gates FAILED"; tail -30 "$d/pre-flight" >&2; fi
+  fi
+  # RTC_BASELINE=1: diagnosis only — re-run the failed gate on origin/<default> and label its
+  # failed lines branch-only vs pre-existing. Never changes rc.
+  if [ "$rc" != 0 ] && [ "${RTC_BASELINE:-0}" = 1 ] && [ -n "$failed_label" ]; then
+    baseline_classify "$failed_label" "$failed_log"
   fi
   # Stamp only the tree that was tested: an edit DURING the run means neither the tree the suites
   # started on nor the one now on disk is proven green.
