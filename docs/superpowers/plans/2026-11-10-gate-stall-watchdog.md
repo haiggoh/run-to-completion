@@ -46,20 +46,85 @@ stack dumps, hermetic test env) are a separate plan.
 5. The baseline run never changes the verdict and never touches the canonical checkout or the shipped
    worktree (Task 3 `baseline_reports_but_still_fails`, `baseline_leaves_no_worktree`).
 
-## Authority
+## 🚨 Standing rules for the executor — read before anything else
 
-Executor may edit, test and commit on a feature branch in a worktree of `~/ClaudeWorkspace/run-to-completion`.
-Ship (merge → tag → release → refresh) only after the user approves the plan's result; ship via the repo's
-own `bin/rtc-ship.sh`, depth asked once. No force-push, no tag moves.
+You are a free-lane session with no chat history. This file is your whole brief. Rules:
+
+1. Work ONLY in `~/ClaudeWorkspace/.wt/rtc-stall-watchdog` (branch `feat/gate-stall-watchdog`). Never `cd`
+   into, edit, or switch the branch of `~/ClaudeWorkspace/run-to-completion` (the canonical checkout: the
+   installed `rtc-ship.sh` shim and every ship resolve through it).
+2. **Highest boundary granted: local commits on `feat/gate-stall-watchdog`.** No push, no merge, no tag, no
+   release, no version bump beyond Task 4's local commit, no `claude plugin update`, and never run
+   `bin/rtc-ship.sh` against a REAL repo — only `--test-only` / `--versions-only` on scratch repos the tests
+   create, and `--bump-versions .` / `--versions-only .` / `--help` in this worktree.
+3. Never edit the installed plugin cache (`~/.claude/plugins/cache/...`) or `~/.local/bin/rtc-ship.sh`.
+4. Stage BY PATH (`git add <file>…`), never `git add -A` / `.`; check `git diff --cached --stat` before each commit.
+5. Never print process argv: no `ps aux`, `ps -o args`/`command`, `pgrep -a`/`-fl`. Use `ps -o pid,ppid,stat,etime,time,comm`.
+6. Kill only processes YOUR tests started, by pid. Never `pkill`/`killall`, never touch ports 4141-4151 or
+   8000-8010 (inference endpoints serving live sessions, possibly yours).
+7. Tool names are case-sensitive: the shell tool is `Bash`. Never pass a JSON payload as a `Write` content
+   string — write JSON through `Bash` with a quoted heredoc (`cat > f <<'EOF' … EOF`).
+8. Test runs: targeted suites in the foreground (each finishes in seconds). Any run that may exceed ~5
+   minutes goes to the background with a log (`… > /tmp/x.log 2>&1; echo exit=$? >> /tmp/x.log`): a
+   silent foreground call over ~10 min kills your session.
+9. Read results from the result line or the `exit=` line, never from a pipeline (`| tail` hides the exit
+   code). "Not run" is reported as not run, never as passed.
+10. Known-bad mutations: copy the file first (`cp f /tmp/f.good`), mutate, confirm it landed
+    (`cmp -s` must DIFFER), run, restore, confirm `cmp` identical. A mutation that did not land "reports caught".
+11. Never weaken or delete an assertion to make a run green. If an assertion contradicts a fact, inspect the
+    instrument (the test harness) first.
+12. On any unexpected failure: STOP that task, diagnose, fix, rerun, and show BOTH runs in the receipt.
+
+## 📌 Facts (labelled)
+
+- *confirmed live 2026-11-10:* worktree `~/ClaudeWorkspace/.wt/rtc-stall-watchdog` exists on branch
+  `feat/gate-stall-watchdog` from `origin/main` = `c0763c8` (run-to-completion 1.1.0); this plan is its
+  first commit (`029f456`). Canonical checkout clean on `main`.
+- *confirmed live:* `gates()` is `bin/rtc-ship.sh:359-427`; the config `test_cmd` path runs in the FOREGROUND
+  with no stdin redirect (`:389`), while the default pytest path (`:398-399`) and pre-flight (`:381`) use
+  `</dev/null`. `run_logged` is `:72-84`; `phase` is `:66`; the header env doc block is `:38-56` and `--help`
+  prints the header via `usage()` (`:64`).
+- *confirmed live:* this repo's own gate: rtc-ship.json `test_cmd` = `parallel --will-cite -j 12 bash ::: tests/test_*.sh`;
+  GNU parallel is at `/opt/homebrew/bin/parallel`. Shell test harness pattern: `tests/test_gates.sh`
+  (`mkrepo`, `gate`, `ok/bad/is/has`, stubbed `$HOME/.local/bin/pytest` under a scratch HOME).
+- *confirmed live:* no `py-spy` on this machine; do not depend on it.
+- *decision:* `/bin/bash` is 3.2.57 here. `timeout`/`gtimeout` exist on THIS machine only via Homebrew coreutils;
+  rtc-ship is published, so neither the script nor its tests may depend on them. The tests' 30 s guard is
+  plain bash: run the gate in the background, a background `sleep 30` + `kill` of that pid, `wait`.
+- *dated observation (2026-11-06/07, memory):* real free-agents gates wedged at 0% CPU with a frozen log; root
+  cause never identified. Do not claim this plan fixes that cause — it makes the stall visible and bounded.
+- *unknown to inspect in Phase 0:* exact `ps -o time=` format on this macOS (expected `m:ss.cc`), and
+  whether `pgrep -P` is present (it is on macOS; confirm).
+
+## 🔒 Authority matrix
+
+| Operation | Status |
+|---|---|
+| Read anything in the worktree; run tests; scratch repos under `mktemp -d` | allowed now |
+| Edit files in the worktree; local commits on `feat/gate-stall-watchdog` | allowed now (rule 4) |
+| `/offload` dispatches (free-agents `free-agent-tool.py`) for QC milestones | allowed now (free lanes only) |
+| Start/kill processes | only ones your own tests start, by pid (rules 5-6) |
+| Push the branch, merge, tag, release, refresh the installed plugin | **prohibited** — the reviewing session ships after the user approves |
+| Any paid model call, downloads, credential changes, edits outside the worktree | **prohibited** |
+
+**Side effects:** the tests start background `sleep`/`python3` processes, FIFOs and scratch git repos (with
+a local bare `origin` in Task 3). All live under `mktemp -d` and die with the test (`trap … EXIT` kills the
+test's own pids and removes its dirs). Nothing touches the network, real repos, or real config.
 
 ---
 
 ### Phase 0 — preflight (no edits)
 
-- [ ] `git -C ~/ClaudeWorkspace/run-to-completion status --porcelain` empty, on `main`; create worktree
-      `~/ClaudeWorkspace/.wt/rtc-stall-watchdog` on new branch `feat/gate-stall-watchdog` from `origin/main`.
-- [ ] Baseline: `bash tests/test_gates.sh; echo exit=$?` and the full `test_cmd` from rtc-ship.json, both
-      green. Record the counts.
+- [ ] Write exactly three sentences: what Task 1 adds, how Tasks 2–3 depend on it, and what a user sees on
+      the next stalled ship once Task 4 is done.
+- [ ] `pwd` = the worktree; `git status --porcelain` empty; `git log --oneline -2` shows `029f456` on `c0763c8`.
+- [ ] Probe the unknowns: `sleep 5 & ps -o time= -p $!; pgrep -P $$ >/dev/null; echo pgrep=$?` — record the format.
+- [ ] Baseline, both green, results recorded: `bash tests/test_gates.sh; echo exit=$?` and the repo gate
+      `parallel --will-cite -j 12 bash ::: tests/test_*.sh > /tmp/rtc-base.log 2>&1; echo exit=$?`.
+- [ ] `python3 ~/.claude/plugins/cache/haiggoh/free-agents/*/bin/free-agent-tool.py --list` (pick the highest
+      version dir): record which free reviewer lanes are available for the QC milestones. None ⇒ say so
+      and continue; the reviewing session then runs the QC dispatch itself.
+- **🧪 Receipt 0:** the three sentences, the outputs above, baseline result lines.
 
 ### Task 1: `watch_gate` — the supervisor
 
@@ -158,7 +223,73 @@ failed AND `RTC_BASELINE=1`); extend tests; README + header docs.
 - [ ] `rtc-ship.sh --help` shows the three new env/config entries (RUN it; grep is not proof).
 - [ ] Full suite via the repo's `test_cmd`, `; echo exit=$?` → 0. Commit `chore(release): 1.2.0 — gate stall watchdog`.
 
-## Final delivery
+## 🧪 Receipt format (end of EVERY task)
 
-Per task: commit SHA, test command + result line, each known-bad run's result. The pre-fix reproduction from
-Task 2 Step 2. What was NOT verified (the watchdog on a real free-agents wedge happens only on its next ship).
+`pwd`; the exact test command; its result line and `exit=`; each known-bad mutation with the `cmp`-differs
+line, its RED result line, and the restore `cmp`-identical line; `git log --oneline -1` after the commit.
+
+## 🔎 Quality-control milestones
+
+Playbook: `~/.claude/plans/_playbooks/Playbook-milestone-qc-offload-test-proof.md` — read it once before
+Task 1. Its point: the executor wrote both code and tests, so it is the worst-placed reviewer of whether a
+test proves the REQUIREMENT or only its appearance ("declared ≠ delivered").
+
+**Standing rule, verbatim:** *At each milestone, run /offload (free-agents:offload) — a stateless dispatch to
+an out-of-family reviewer — with the brief below. Treat its findings as hypotheses: run every proposed
+mutation; fix or rebut each finding with evidence. Do not start the next task with an open finding.*
+
+- **Reviewer:** OUT-OF-FAMILY from you (you are Z.ai GLM): pick the strongest non-GLM free lane from Phase 0's
+  `--list`. No free lane available ⇒ write that in the receipt and continue; never use a paid model.
+- **How:** `python3 <free-agents>/bin/free-agent-tool.py <<'JSON' … JSON` with `{"prompt": <brief>, "files": [<paths>]}`.
+  A dispatch cannot read the disk — attach every file it must see (absolute paths).
+- **Brief:** copy the "dispatch brief" block from the playbook verbatim, then append the requirements under
+  review for that milestone (below), quoted from this plan.
+
+| Milestone | After | Requirements under review | Attach |
+|---|---|---|---|
+| M1 | Task 1 | stall ⇒ named `STALLED` + `.stall` with tree and log tail, rc 124; busy-silent and logging-sleep are NOT stalls; foreign processes survive; bad overrides abort naming the source; no argv in `.stall`; centisecond CPU parsing | `bin/rtc-ship.sh`, `tests/test_stall_watchdog.sh`, this plan |
+| M2 | Task 2 | every gate (config `test_cmd`, default pytest, pre-flight) gets `/dev/null` stdin and runs under `watch_gate`; pre-flight still concurrent | same + `tests/test_gates.sh` |
+| M3 | Task 3 | `RTC_BASELINE=1` labels branch-only vs pre-existing, never changes rc, leaves no worktree (also when the baseline stalls); off by default | same |
+| M4 | Task 4, before delivery | README/`--help`/CHANGELOG claims match behaviour; every claim in the CHANGELOG entry has a delivery-level test | same + `README.md`, `CHANGELOG.md` |
+
+**Playbook hard rules applied to this plan:**
+1. *Declaration ≠ proof.* "`watch_gate` exists" or "the header documents `RTC_STALL_SECONDS`" proves nothing:
+   the proof is a real stalled command ending with `STALLED` and the `--help` OUTPUT showing the entry (RUN it).
+2. *Reachability from the shipped entry point.* Every Task 1–3 behaviour has ≥1 test that goes through
+   `bin/rtc-ship.sh --test-only <scratch-repo>` with default wiring — never only a direct call of `watch_gate`.
+3. *Your explanation is a claim too.* If you state a cause for any failure, quote the probe whose result FLIPS
+   with that cause.
+4. *Independent effect check.* You are a free-lane executor, so the reviewing session will itself run one
+   real stall through the delivered script before shipping; your receipts must give it the exact command.
+
+**Per-milestone receipt:** reviewer model + route, the verdict table (requirement → PROVEN / WEAK / UNPROVEN /
+DECLARED-ONLY → mutation → fixture fix), each proposed mutation with its RED run line, rebuttals citing the
+line that proves the reviewer wrong, and the final green run line.
+
+## 🧨 Adversarial review
+
+- Watchdog tested only by calling `watch_gate` directly → green → the real `gates()` path never uses it → a
+  stalled ship still hangs → rule 2 above → Task 2's `*_stall_is_named` tests via `--test-only`.
+- Stall check on log size only → green on the sleep test → a busy silent suite gets killed mid-run →
+  both signals required → `busy_silent_is_not_a_stall` + known-bad (a).
+- Kill by name (`pkill sleep`) → green → a concurrent session's processes die → tree kill only →
+  `kill_spares_foreign_processes` + known-bad (c).
+- `.stall` dumps `ps -o args` for "more context" → green → an API key in a log file → `comm` only →
+  `no_args_leak`.
+- The red run of Task 1 Step 2 hangs forever (no watchdog yet) → session stalls → each harness gate is
+  wrapped in a 30 s guard the TEST owns → Step 2 terminates red.
+- A same-width mutation reuses a stale artefact → "caught"/"survived" lies → rule 10 (`cmp` before and after)
+  — shell scripts have no bytecode, but a mutated file that was never written still reports caught.
+- `RTC_BASELINE` worktree left behind or created in the canonical checkout → disk clutter or a dirty
+  canonical → `trap` cleanup + `baseline_leaves_no_worktree`, created under `mktemp -d` only.
+- Task 4 version bump read as permission to ship → a release nobody approved → rule 2 (local commit only).
+
+## 🏁 Final delivery (write at the end, then STOP)
+
+1. Per task: commit SHA and its receipt; the Task 2 Step 2 pre-fix reproduction (the stdin hang, red).
+2. Per milestone: the QC receipt (or "no free reviewer lane — not run").
+3. Implemented vs planned: anything not done, and why.
+4. Not verified: the watchdog against a REAL free-agents wedge (only its next ship can show that).
+5. Confirm: nothing pushed, merged, tagged, released or refreshed; canonical checkout untouched
+   (`git -C ~/ClaudeWorkspace/run-to-completion status --porcelain` empty, still on `main`).
+6. **Highest boundary reached: local commits on `feat/gate-stall-watchdog`.** Hand back to the user.
