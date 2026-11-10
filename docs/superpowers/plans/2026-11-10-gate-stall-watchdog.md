@@ -132,13 +132,13 @@ test's own pids and removes its dirs). Nothing touches the network, real repos, 
 
 ### Phase 0 — preflight (no edits)
 
-- [ ] Write exactly three sentences: what Task 1 adds, how Tasks 2–3 depend on it, and what a user sees on
+- [x] Write exactly three sentences: what Task 1 adds, how Tasks 2–3 depend on it, and what a user sees on
       the next stalled ship once Task 4 is done.
-- [ ] `pwd` = the worktree; `git status --porcelain` empty; `git log --oneline -2` shows `029f456` on `c0763c8`.
-- [ ] Probe the unknowns: `sleep 5 & ps -o time= -p $!; pgrep -P $$ >/dev/null; echo pgrep=$?` — record the format.
-- [ ] Baseline, both green, results recorded (also time EACH tests/test_*.sh alone — the split playbook needs the per-file table): `bash tests/test_gates.sh; echo exit=$?` and the repo gate
+- [x] `pwd` = the worktree; `git status --porcelain` empty; `git log --oneline -2` shows `029f456` on `c0763c8`.
+- [x] Probe the unknowns: `sleep 5 & ps -o time= -p $!; pgrep -P $$ >/dev/null; echo pgrep=$?` — record the format.
+- [x] Baseline, both green, results recorded (also time EACH tests/test_*.sh alone — the split playbook needs the per-file table): `bash tests/test_gates.sh; echo exit=$?` and the repo gate
       `parallel --will-cite -j 12 bash ::: tests/test_*.sh > /tmp/rtc-base.log 2>&1; echo exit=$?`.
-- [ ] `python3 ~/.claude/plugins/cache/haiggoh/free-agents/*/bin/free-agent-tool.py --list` (pick the highest
+- [x] `python3 ~/.claude/plugins/cache/haiggoh/free-agents/*/bin/free-agent-tool.py --list` (pick the highest
       version dir): record which free reviewer lanes are available for the QC milestones. None ⇒ say so
       and continue; the reviewing session then runs the QC dispatch itself.
 - **🧪 Receipt 0:** the three sentences, the outputs above, baseline result lines.
@@ -163,7 +163,7 @@ create `tests/test_stall_watchdog.sh` (harness copied from `tests/test_gates.sh`
 - `<log>.stall` content: one header line `STALLED <label>: no output and no CPU for <N>s`, the tree as
   `ps -o pid=,ppid=,stat=,etime=,time=,comm=` (NEVER args), then `tail -n 30 <log>`.
 
-- [ ] **Step 1: tests** in `tests/test_stall_watchdog.sh`, each case a fresh `mkrepo` whose rtc-ship.json
+- [x] **Step 1: tests** in `tests/test_stall_watchdog.sh`, each case a fresh `mkrepo` whose rtc-ship.json
       `test_cmd` is set as named, run as `RTC_STALL_SECONDS=3 RTC_STALL_POLL=1 rtc-ship.sh --test-only <dir>`:
   - `stall_is_named`: `test_cmd = "sleep 300"` → rc ≠ 0 in under 30 s wall time; output has
     `STALLED tests (config)`; the kept log dir holds `main.stall` whose first line starts `STALLED` and
@@ -178,15 +178,15 @@ create `tests/test_stall_watchdog.sh` (harness copied from `tests/test_gates.sh`
     rtc-ship.json `"stall_seconds": 0` → names `stall_seconds`.
   - `no_args_leak`: the `.stall` file does not contain the test_cmd's secret-looking argv
     (`test_cmd = "exec sleep 300 SECRET_TOKEN_x"` → `.stall` lacks `SECRET_TOKEN_x`).
-- [ ] **Step 2:** run `bash tests/test_stall_watchdog.sh; echo exit=$?` → FAIL (watchdog absent: the stall case
+- [x] **Step 2:** run `bash tests/test_stall_watchdog.sh; echo exit=$?` → FAIL (watchdog absent: the stall case
       runs until the harness's own 30 s guard kills it — the harness MUST wrap each gate in a 30 s guard so
       the red run terminates).
-- [ ] **Step 3:** implement the four functions in `bin/rtc-ship.sh`; document `RTC_STALL_SECONDS`,
+- [x] **Step 3:** implement the four functions in `bin/rtc-ship.sh`; document `RTC_STALL_SECONDS`,
       `RTC_STALL_POLL (tests only)` and the `stall_seconds` config key in the header env block.
-- [ ] **Step 4:** tests green. **Known-bad discriminants** (one at a time, then restore, `cmp` against a copy):
+- [x] **Step 4:** tests green. **Known-bad discriminants** (one at a time, then restore, `cmp` against a copy):
       (a) make `tree_cpu` print `0` always → `busy_silent_is_not_a_stall` RED; (b) drop the `wc -c` term →
       `logging_sleep_is_not_a_stall` RED; (c) kill by `pkill sleep` instead of the tree → `kill_spares_foreign_processes` RED.
-- [ ] **Step 5:** commit `feat(rtc-ship): watch_gate — a silent, CPU-idle gate ends as a named STALLED failure`.
+- [x] **Step 5:** commit `feat(rtc-ship): watch_gate — a silent, CPU-idle gate ends as a named STALLED failure`.
 
 ### Task 2: every gate runs supervised, stdin detached
 

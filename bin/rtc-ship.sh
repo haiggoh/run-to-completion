@@ -25,8 +25,9 @@
 #
 # Per-repo specifics live in TWO places, both inside the repo being shipped:
 #   rtc-ship.json   DATA the tool needs: the tag prefix, which version surfaces to check, release
-#                   asset globs, the plugin to refresh, test worker count, and "reap": false to
-#                   permanently keep worktrees and merged branches (reaping is the default).
+#                   asset globs, the plugin to refresh, test worker count, the stall window
+#                   ("stall_seconds"), and "reap": false to permanently keep worktrees and merged
+#                   branches (reaping is the default).
 #                   "require_default_branch_checkout": true (RECOMMENDED) refuses to ship unless the
 #                   canonical checkout is clean on the default branch; unset, the ship goes around it.
 #   .rtc/*.sh       COMMANDS only that repo has, run at named points if present and executable:
@@ -39,6 +40,10 @@
 #   RTC_MAIN            canonical checkout (default: derived from the worktree's git common dir)
 #   RTC_SKIP_TESTS=1    skip the suite gates (prefer the tree stamp: a green run of THIS tree self-skips)
 #   RTC_TEST_WORKERS    xdist workers for the main suite (beats rtc-ship.json test_workers; default 12)
+#   RTC_STALL_SECONDS   seconds of NO output and NO CPU time before a stuck test gate is killed
+#                       and failed as STALLED (default 600; rtc-ship.json "stall_seconds" sits
+#                       between this env var and the default in precedence)
+#   RTC_STALL_POLL      (tests only) seconds between the watchdog's stall samples (default 15)
 #   RTC_SKIP_REFRESH=1  do not refresh the installed plugin after a confirmed release
 #                       (refresh = get-haiggoh when installed, else `claude plugin update`
 #                       against rtc-ship.json's refresh_marketplace, default haiggoh)
@@ -81,6 +86,116 @@ run_logged() {  # run_logged <label> <log> <cmd...>
     tail -n 15 "$log" | sed 's/^/      /' >&2
     return "$rc"
   fi
+}
+
+# ----------------------------------------------------------------------------------------------
+# The gate stall watchdog. A gate producing NEITHER output NOR CPU time for stall_seconds is
+# stuck, not slow: watch_gate ends it as a named STALLED failure with a <log>.stall diagnosis
+# (process tree as comm — never argv, which can carry secrets — plus the log tail) and kills only
+# that tree. CPU time is counted in CENTISECONDS, not seconds: a healthy gate at ~0.05% CPU gains
+# under 1 s per 600 s window, and whole seconds would read that as a stall.
+# ----------------------------------------------------------------------------------------------
+
+stall_seconds() {  # the stall window in seconds: RTC_STALL_SECONDS > rtc-ship.json "stall_seconds" > 600
+  local v src
+  if [ -n "${RTC_STALL_SECONDS:-}" ]; then v=$RTC_STALL_SECONDS; src="RTC_STALL_SECONDS"
+  else v=$(cfg_get "stall_seconds" "600"); src='rtc-ship.json "stall_seconds"'; fi
+  case "$v" in
+    ''|*[!0-9]*|0) echo "✖ $src must be a positive integer (seconds), got '$v'" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$v"
+}
+
+tree_pids() {  # tree_pids <pid> — the pid and every descendant pid, one per line (recursive pgrep -P)
+  local c
+  printf '%s\n' "$1"
+  for c in $(pgrep -P "$1" 2>/dev/null); do tree_pids "$c"; done
+}
+
+tree_cpu() {  # tree_cpu <pid> — tree_pids' summed cumulative CPU in CENTISECONDS; a vanished pid
+              # contributes 0. ps -o time= prints [[dd-]hh:]mm:ss[.cc] (macOS: 0:00.01).
+  local total=0 pid t rest frac secs dd hh mm ss
+  for pid in $(tree_pids "$1"); do
+    t=$(ps -o time= -p "$pid" 2>/dev/null || :)
+    t=${t//[[:space:]]/}
+    [ -n "$t" ] || continue
+    rest=$t; frac=0
+    case "$t" in
+      *.*)
+        frac=${t##*.}; rest=${t%.*}
+        case "$frac" in [0-9]) frac="${frac}0" ;; esac     # tenths -> centiseconds
+        case "$frac" in ''|*[!0-9]*) continue ;; esac      # a garbled field contributes 0
+        frac=${frac%"${frac#??}"}                          # keep at most two digits
+        ;;
+    esac
+    secs=0
+    case "$rest" in
+      *-*) dd=${rest%%-*}; rest=${rest#*-}
+           case "$dd" in ''|*[!0-9]*) continue ;; esac
+           secs=$(( 10#$dd * 86400 )) ;;
+    esac
+    case "$rest" in
+      *:*:*) hh=${rest%%:*}; mm=${rest#*:}; mm=${mm%%:*}; ss=${rest##*:} ;;
+      *:*)   hh=0; mm=${rest%%:*}; ss=${rest#*:} ;;
+      *)     hh=0; mm=0; ss=$rest ;;
+    esac
+    case "$hh" in ''|*[!0-9]*) continue ;; esac
+    case "$mm" in ''|*[!0-9]*) continue ;; esac
+    case "$ss" in ''|*[!0-9]*) continue ;; esac
+    total=$(( total + (secs + 10#$hh * 3600 + 10#$mm * 60 + 10#$ss) * 100 + 10#$frac ))
+  done
+  printf '%s\n' "$total"
+}
+
+kill_tree() {  # kill_tree <pid> — TERM the gate's tree, then KILL whatever survives the grace;
+               # RTC_STALL_KILL_GRACE (tests only, default 5) sets the TERM->KILL seconds.
+  local pid=$1 grace p tree waited=0
+  grace=${RTC_STALL_KILL_GRACE:-5}
+  case "$grace" in ''|*[!0-9]*) grace=5 ;; esac
+  tree=$(tree_pids "$pid")     # snapshot while the tree is alive: TERM can reparent children
+  for p in $tree; do kill -TERM "$p" 2>/dev/null || :; done
+  while [ "$waited" -lt "$grace" ]; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  for p in $tree $(tree_pids "$pid" 2>/dev/null); do kill -KILL "$p" 2>/dev/null || :; done
+  :
+}
+
+watch_gate() {  # watch_gate <label> <log> <pid> — wait for the gate command; return its exit
+                # status, or 124 after a stall, having written <log>.stall and killed the tree.
+                # Stall = BOTH the log size and the tree CPU unchanged across consecutive samples
+                # spanning >= stall_seconds; samples every ${RTC_STALL_POLL:-15} s.
+  local label=$1 log=$2 pid=$3
+  local stall poll size cpu last_size=-1 last_cpu=-1 stall_start now rc
+  stall=$(stall_seconds) || return 1
+  poll=${RTC_STALL_POLL:-15}
+  case "$poll" in ''|*[!0-9]*|0) poll=15 ;; esac
+  while :; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      rc=0; wait "$pid" || rc=$?
+      return "$rc"
+    fi
+    size=$(wc -c <"$log" 2>/dev/null || printf 0)
+    size=${size//[!0-9]/}; [ -n "$size" ] || size=0
+    cpu=$(tree_cpu "$pid")
+    now=$SECONDS
+    if [ "$size" != "$last_size" ] || [ "$cpu" != "$last_cpu" ]; then
+      stall_start=$now                                   # progress: restart the quiet window
+    elif [ $((now - stall_start)) -ge "$stall" ]; then
+      {
+        printf 'STALLED %s: no output and no CPU for %ss\n' "$label" "$stall"
+        ps -o pid=,ppid=,stat=,etime=,time=,comm= \
+          -p "$(tree_pids "$pid" | paste -s -d, -)" 2>/dev/null || :
+        tail -n 30 "$log" 2>/dev/null || :
+      } >"$log.stall"
+      kill_tree "$pid"
+      return 124
+    fi
+    last_size=$size; last_cpu=$cpu
+    sleep "$poll"
+  done
 }
 
 # ----------------------------------------------------------------------------------------------
@@ -358,12 +473,17 @@ worktree_tree() {  # the tree id of what the suites will actually read: the WORK
 
 gates() {
   local tree stamp d rc=0 pids=() names=() out
+  local stall_seen=0 wrc cpid
   tree=$(worktree_tree) || { echo "✖ could not hash the working tree for the test stamp" >&2; return 1; }
   stamp="$(git rev-parse --git-common-dir)/rtc-tested/$tree"
   if [ -e "$stamp" ]; then
     phase "tests: tree ${tree:0:10} already passed every gate ($(date -r "$stamp" '+%H:%M')) — skipped"
     return 0
   fi
+  # The stall window is resolved BEFORE anything launches: a SET but invalid override aborts here
+  # (naming its source), never after its gate command is already running — that would orphan the
+  # command this function is about to supervise.
+  stall_seconds >/dev/null || return 1
   # Worker count: env, then rtc-ship.json's test_workers, then 12. The config key was documented
   # and never read (2026-10-27) — a SET but invalid value now aborts rather than falling through.
   local workers src
@@ -386,8 +506,19 @@ gates() {
   # command comes from the config, and an UNCOLLECTED suite is a failure, never a silent pass.
   local test_cmd; test_cmd=$(cfg_get "test_cmd" "")
   if [ -n "$test_cmd" ]; then
-    if bash -c "$test_cmd" >"$d/main" 2>&1; then phase "tests (config): pass"
-    else phase "✖ tests (config) FAILED"; grep -E "FAIL|✖" "$d/main" | head -10 >&2; rc=1; fi
+    bash -c "$test_cmd" >"$d/main" 2>&1 &
+    cpid=$!
+    if watch_gate "tests (config)" "$d/main" "$cpid"; then phase "tests (config): pass"
+    else
+      wrc=$?
+      if [ "$wrc" = 124 ]; then
+        rc=1; stall_seen=1
+        phase "✖ tests (config) STALLED — diagnosis in $d/main.stall"
+      else
+        rc=1
+        phase "✖ tests (config) FAILED"; grep -E "FAIL|✖" "$d/main" | head -10 >&2
+      fi
+    fi
   else
     # pytest where it is installed: the pipx location first (where this machine's lives), then PATH,
     # then the active interpreter's module. Never a single hardcoded path (2026-10-25 review).
@@ -423,6 +554,9 @@ gates() {
     rm -rf "$d"
   elif [ "$rc" = 0 ]; then mkdir -p "$(dirname "$stamp")"; touch "$stamp"; rm -rf "$d"
   else echo "✖ tests failed — full logs kept in $d" >&2; fi
+  # A stall is the more urgent failure: 124 (the timeout(1) convention) whenever ANY gate stalled,
+  # over an ordinary 1 — resolved at this single exit so no later failure site can clobber it.
+  if [ "$rc" != 0 ] && [ "$stall_seen" = 1 ]; then rc=124; fi
   return "$rc"
 }
 

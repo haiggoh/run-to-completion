@@ -53,3 +53,5 @@ the read-only checks, the baseline runs, and `free-agent-tool.py --list`. Then T
 ## Progress log (append one line per receipt: date time — task/milestone — commit — result line)
 
 - 2026-11-10 — handoff written by the planning session — plan at `973ae21`.
+- 2026-11-10 — Phase 0 preflight (rides with Task 1 commit) — clean tree at `9a515e6`; `ps -o time=` = `0:00.00` (mm:ss.cc); `pgrep -P` ok; 19/19 baseline files green, slowest `test_ship_cleanup_rescue` 205s seq, parallel gate 42s; QC reviewer lane: Gemini 3.8 Flash (google, out-of-family).
+- 2026-11-10 — Task 1 `watch_gate` + helpers + config-path wiring (commit below) — detect 13/13, progress 4/4, scope 6/6; mutations (a) tree_cpu→0, (b) size-term dropped, (c) pkill-by-name each RED then restored cmp-identical; full gate 22 files exit=0 60s; stall propagates as 124 via --test-only (user: 124 dominates mixed runs).
