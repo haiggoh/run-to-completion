@@ -51,8 +51,7 @@ echo "== RTC_BASELINE=1 labels the failed lines; the gate still fails =="
 mkbaserepo "$TMP/bl"
 before=$(wtcount "$TMP/bl")
 stall_gate "$TMP/bl/w" RTC_BASELINE=1 RTC_STALL_SECONDS=30 RTC_STALL_POLL=1 RTC_STALL_KILL_GRACE=1
-if [ "$RIG_RC" != 0 ]; then ok "the gate still fails (rc=$RIG_RC)"
-else bad "the gate still fails" "rc != 0" "rc=$RIG_RC"; fi
+is "the gate still fails with exactly the test-failure rc 1 (baseline did not change it)" "1" "$RIG_RC"
 bo=$(sect branch-only "$TMP/bl/w/log/out")
 pe=$(sect pre-existing "$TMP/bl/w/log/out")
 has "output has a branch-only section" "$(cat "$TMP/bl/w/log/out")" "branch-only:"
@@ -79,8 +78,7 @@ mkbaserepo "$TMP/stall"
     && git push -q origin HEAD:master && git checkout -q topic )
 before=$(wtcount "$TMP/stall")
 stall_gate "$TMP/stall/w" RTC_BASELINE=1 RTC_STALL_SECONDS=3 RTC_STALL_POLL=1 RTC_STALL_KILL_GRACE=1
-if [ "$RIG_RC" != 0 ]; then ok "the gate still fails (rc=$RIG_RC)"
-else bad "the gate still fails" "rc != 0" "rc=$RIG_RC"; fi
+is "the stalled BASELINE did not leak its 124 into the gate rc (still 1)" "1" "$RIG_RC"
 has "the baseline run happened" "$(cat "$TMP/stall/w/log/out")" "baseline:"
 is "no worktree left behind after a stalled baseline" "$before" "$(wtcount "$TMP/stall")"
 
