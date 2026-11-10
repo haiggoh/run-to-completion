@@ -332,6 +332,24 @@ worktree and labels the failed test lines `branch-only:` vs `pre-existing:` — 
 gate still fails, and the worktree is always removed afterwards, even when the baseline run itself
 stalls.
 
+### When a gate stalls
+
+A gate that produces **neither output nor CPU time** for the stall window is stuck, not slow.
+Every gate (the repo's `test_cmd`, the default pytest run, `.rtc/pre-flight.sh`) runs in the
+background, stdin-detached, supervised by `watch_gate`: when both signals freeze, the ship fails
+with `✖ <gate> STALLED — diagnosis in <log>.stall` and `--test-only` exits **124** (the
+`timeout(1)` convention), distinct from an ordinary test failure (1). The diagnosis file lives
+next to the gate's log (kept on failure) and holds a `STALLED <gate>: no output and no CPU for
+<N>s` header, the gate's process tree (`comm` only — argv can carry secrets), and the last 30 log
+lines. Only the gate's own process tree is killed (TERM, then KILL after a grace); processes the
+gate did not start are untouched.
+
+- `RTC_STALL_SECONDS` / `stall_seconds` in `rtc-ship.json` — the stall window (env > config >
+  600 s default); a set-but-invalid value aborts the gate naming its source.
+- `RTC_BASELINE=1` — see above.
+- `RTC_SKIP_TESTS=1` is **no longer the stall workaround** — the watchdog ends a stuck gate in
+  bounded time, with a diagnosis file.
+
 ## Independence
 
 Every skill is written in capability terms and names no other plugin. If you have

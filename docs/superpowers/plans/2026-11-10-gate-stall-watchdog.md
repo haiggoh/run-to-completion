@@ -233,16 +233,16 @@ failed AND `RTC_BASELINE=1`); extend tests; README + header docs.
 
 ### Task 4: docs, version, full suite
 
-- [ ] Per-file timing (playbook step 1/6): time each `tests/test_*.sh` alone; record the five slowest. No new
+- [x] Per-file timing (playbook step 1/6): time each `tests/test_*.sh` alone; record the five slowest. No new
       stall file may be the slowest file in the suite; if one is, split it again by theme. Receipt: the table
       before (Phase 0 baseline) and after, plus the repo gate's wall time before and after.
 
-- [ ] README: a "When a gate stalls" section — what `STALLED` means, where `.stall` lives, `RTC_STALL_SECONDS`,
+- [x] README: a "When a gate stalls" section — what `STALLED` means, where `.stall` lives, `RTC_STALL_SECONDS`,
       `stall_seconds`, `RTC_BASELINE=1`, and that `RTC_SKIP_TESTS=1` is no longer the stall workaround.
-- [ ] CHANGELOG `## [1.2.0] — <date> — gate stall watchdog`; `bin/rtc-ship.sh --bump-versions . 1.2.0`;
+- [x] CHANGELOG `## [1.2.0] — <date> — gate stall watchdog`; `bin/rtc-ship.sh --bump-versions . 1.2.0`;
       `--versions-only .` agrees.
-- [ ] `rtc-ship.sh --help` shows the three new env/config entries (RUN it; grep is not proof).
-- [ ] Full suite via the repo's `test_cmd`, `; echo exit=$?` → 0. Commit `chore(release): 1.2.0 — gate stall watchdog`.
+- [x] `rtc-ship.sh --help` shows the three new env/config entries (RUN it; grep is not proof).
+- [x] Full suite via the repo's `test_cmd`, `; echo exit=$?` → 0. Commit `chore(release): 1.2.0 — gate stall watchdog`.
 
 ## 🧪 Receipt format (end of EVERY task)
 

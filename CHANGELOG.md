@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.2.0] — 2026-11-10 — gate stall watchdog
+
+- **Added:** a stuck test gate no longer hangs the ship forever. Every gate (the repo's
+  `test_cmd`, the default pytest run, `.rtc/pre-flight.sh`) runs in the background,
+  stdin-detached (`</dev/null`), supervised by `watch_gate`: when BOTH the gate's log size and
+  its process tree's CPU time are unchanged for the stall window, the ship fails with
+  `✖ <gate> STALLED — diagnosis in <log>.stall` and `--test-only` exits **124**, distinct from
+  an ordinary test failure (1). The `.stall` file holds a `STALLED <gate>: no output and no CPU
+  for <N>s` header, the process tree (`comm` only — never argv, which can carry secrets), and the
+  log tail; only the gate's own process tree is killed (TERM, then KILL after a grace).
+- **Added:** `RTC_STALL_SECONDS` env var and `stall_seconds` in `rtc-ship.json` set the stall
+  window (env > config > 600 s default; a set-but-invalid value aborts naming its source);
+  `RTC_STALL_POLL` (tests only) sets the sample interval. `RTC_BASELINE=1` re-runs a failed gate
+  on `origin/<default>` in a throwaway worktree and labels the failed lines `branch-only:` vs
+  `pre-existing:` — diagnosis only, the gate still fails, and no worktree is left behind.
+- **Changed:** `RTC_SKIP_TESTS=1` is no longer the way around a stuck gate — the watchdog ends it
+  in bounded time with a diagnosis file.
+- **Tests:** `tests/test_stall_detect.sh`, `test_stall_progress.sh`, `test_stall_scope.sh`,
+  `test_gate_supervision.sh`, `test_gate_baseline.sh` over the shared `tests/lib/stall_rig.sh`
+  (each gate run under a 30 s guard the test owns).
+
 ## [1.1.0] — 2026-11-03 — /ship and /ship-config skills
 
 - **Added:** `/ship` — ship ONE branch of ONE repo attended: infers the worktree/branch
