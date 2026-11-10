@@ -42,10 +42,12 @@ stall_gate "$TMP/be" RTC_STALL_SECONDS=abc RTC_STALL_POLL=1 RTC_STALL_KILL_GRACE
 if [ "$RIG_RC" != 0 ]; then ok "a non-numeric RTC_STALL_SECONDS fails the gate (rc=$RIG_RC)"
 else bad "a non-numeric RTC_STALL_SECONDS fails the gate" "rc != 0" "rc=$RIG_RC"; fi
 has "  naming the variable" "$(cat "$TMP/be/log/out")" "RTC_STALL_SECONDS"
+lacks "  and names ONLY the env source (never the config)" "$(cat "$TMP/be/log/out")" "rtc-ship.json"
 mkrepo "$TMP/bc" '{"tag_prefix":"v","stall_seconds":0,"test_cmd":"echo fast; exit 0"}'
 stall_gate "$TMP/bc" RTC_STALL_POLL=1 RTC_STALL_KILL_GRACE=1
 if [ "$RIG_RC" != 0 ]; then ok "a zero stall_seconds in rtc-ship.json fails the gate (rc=$RIG_RC)"
 else bad "a zero stall_seconds in rtc-ship.json fails the gate" "rc != 0" "rc=$RIG_RC"; fi
 has "  naming the config key" "$(cat "$TMP/bc/log/out")" "stall_seconds"
+lacks "  and names ONLY the config source (never the env var)" "$(cat "$TMP/bc/log/out")" "RTC_STALL_SECONDS"
 
 rig_summary

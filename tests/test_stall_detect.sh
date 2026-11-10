@@ -30,8 +30,7 @@ stall_gate "$TMP/si" RTC_STALL_SECONDS=3 RTC_STALL_POLL=1 RTC_STALL_KILL_GRACE=1
 e=$(date +%s)
 if [ $((e - s)) -lt 25 ]; then ok "the stall ended inside the 30 s guard ($((e - s)) s)"
 else bad "the stall ended inside the 30 s guard" "< 25 s" "$((e - s)) s"; fi
-if [ "$RIG_RC" != 0 ]; then ok "the gate failed (rc=$RIG_RC)"
-else bad "the gate failed" "rc != 0" "rc=$RIG_RC"; fi
+is "the gate's rc is the stall code 124" "124" "$RIG_RC"
 has "rtc-ship's output says STALLED" "$(cat "$TMP/si/log/out")" "STALLED"
 diag=$(sed -n 's/^.*diagnosis in //p' "$TMP/si/log/out" | head -1)
 if [ -n "$diag" ] && [ -f "$diag" ]; then ok "the printed diagnosis path exists ($diag)"
