@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.1] — 2026-11-10 — test hardening for the exit-code vocabulary (QC milestone)
+
+- **Tests:** `tests/test_ship_exit_codes.sh` grew from 4 to 15 assertions after an out-of-family
+  QC dispatch (GLM 5.3 Flash, nvidia) found two unpinned claims: the docs (R4) and the 0/2 ends
+  of the vocabulary (R5). Now pinned: `--help` prints the Exit codes block and pins 124/2, README
+  has the Exit codes section, a stalled **pre-flight** gate on the full ship path also exits 124
+  (gate-kind coverage beyond `test_cmd`), `--versions-only` success exits 0, an unknown flag
+  exits 2, and every failed ship case asserts the scratch repo was tagged NOTHING. Each full-path
+  run sits under a 120 s guard the test owns (30 s/60 s proved too tight under machine load ~100 —
+  the guard then read as rc 143 and masked the ship's real rc). Every strengthening was
+  mutation-checked RED (docs deleted, `exit 2`→`exit 3`, pre-flight `stall_seen` dropped), then
+  restored cmp-identical; clean run 15/15.
+
 ## [1.3.0] — 2026-11-10 — exit-code vocabulary on the ship path
 
 - **Changed:** the full ship loop now propagates the gate vocabulary instead of flattening every
