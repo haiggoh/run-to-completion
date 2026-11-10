@@ -23,6 +23,15 @@
 #   rtc-ship.sh --which-config                print the config this repo would use and exit
 #   rtc-ship.sh --help
 #
+# Exit codes (the same vocabulary on every surface — the ship loop, --test-only, --versions-only):
+#   0     success
+#   1     a gate, the version check, or a later ship step failed
+#   2     usage or config error (unknown flag, bad version argument, invalid rtc-ship.json value)
+#   124   a gate STALLED — no output and no CPU for the stall window (the timeout(1) convention).
+#         It dominates a mixed run (a stall beats an ordinary failure). Callers may branch on 124
+#         (e.g. re-run with RTC_BASELINE=1 for a branch-only vs pre-existing label); any non-zero
+#         exit is still a failure, so existing callers keep working.
+#
 # Per-repo specifics live in TWO places, both inside the repo being shipped:
 #   rtc-ship.json   DATA the tool needs: the tag prefix, which version surfaces to check, release
 #                   asset globs, the plugin to refresh, test worker count, the stall window
@@ -943,8 +952,11 @@ if ! version_gate; then echo "✖ version surfaces disagree — see above. Ship 
 # Pre-flight runs exactly ONCE: inside gates() (concurrently with the main suite), or on its own when
 # the suite gates are skipped. The standalone call used to be `hook pre-flight` — no `.sh`, so it
 # looked for a file that never exists and RTC_SKIP_TESTS=1 ships ran no pre-flight at all.
-if [ "${RTC_SKIP_TESTS:-0}" != 1 ]; then gates || exit 1
-else hook pre-flight.sh || exit 1; fi
+# gates() already resolves its own vocabulary (124 when any gate STALLED, 1 otherwise) at its
+# single exit — propagate it instead of flattening every failure to 1, so callers can branch on
+# the stall code. `|| exit $?` reads gates' rc: in `a || b`, $? inside b is a's status.
+if [ "${RTC_SKIP_TESTS:-0}" != 1 ]; then gates || exit $?
+else hook pre-flight.sh || exit $?; fi
 
 cd "$MAIN"
 # Two routes to the same published result. CLASSIC: the canonical checkout is clean on the default

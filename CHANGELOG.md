@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0] — 2026-11-10 — exit-code vocabulary on the ship path
+
+- **Changed:** the full ship loop now propagates the gate vocabulary instead of flattening every
+  gate failure to exit 1: a stalled gate exits **124** (the `timeout(1)` convention, dominating a
+  mixed run), an ordinary gate failure still exits **1**, usage/config errors keep **2**, success
+  **0** — identical to what `--test-only` already did. Additive: callers that treat any non-zero
+  exit as failure keep working; callers may branch on 124 (e.g. re-run with `RTC_BASELINE=1`).
+- **Docs:** the vocabulary is documented where the verdict is read — the `--help` header and a
+  README "Exit codes" section.
+- **Tests:** `tests/test_ship_exit_codes.sh` drives the real ship entry point against a scratch
+  repo (local bare origin): stall → rc 124 + STALLED output, ordinary failure → rc 1,
+  `--test-only` parity → 124; each full-path run under a 30 s guard the test owns.
+
 ## [1.2.0] — 2026-11-10 — gate stall watchdog
 
 - **Added:** a stuck test gate no longer hangs the ship forever. Every gate (the repo's

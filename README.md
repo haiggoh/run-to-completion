@@ -337,8 +337,8 @@ stalls.
 A gate that produces **neither output nor CPU time** for the stall window is stuck, not slow.
 Every gate (the repo's `test_cmd`, the default pytest run, `.rtc/pre-flight.sh`) runs in the
 background, stdin-detached, supervised by `watch_gate`: when both signals freeze, the ship fails
-with `✖ <gate> STALLED — diagnosis in <log>.stall` and `--test-only` exits **124** (the
-`timeout(1)` convention), distinct from an ordinary test failure (1). The diagnosis file lives
+with `✖ <gate> STALLED — diagnosis in <log>.stall` and both the ship loop and `--test-only` exit
+**124** (the `timeout(1)` convention), distinct from an ordinary test failure (1). The diagnosis file lives
 next to the gate's log (kept on failure) and holds a `STALLED <gate>: no output and no CPU for
 <N>s` header, the gate's process tree (`comm` only — argv can carry secrets), and the last 30 log
 lines. Only the gate's own process tree is killed (TERM, then KILL after a grace); processes the
@@ -349,6 +349,13 @@ gate did not start are untouched.
 - `RTC_BASELINE=1` — see above.
 - `RTC_SKIP_TESTS=1` is **no longer the stall workaround** — the watchdog ends a stuck gate in
   bounded time, with a diagnosis file.
+
+### Exit codes
+
+Every surface (the ship loop, `--test-only`, `--versions-only`) uses one vocabulary: **0** success,
+**1** a gate/version/ship-step failure, **2** usage or config error, **124** a gate STALLED
+(dominating a mixed run). The mapping is additive — any caller that treats non-zero as failure is
+unaffected; callers may branch on 124, e.g. to re-run with `RTC_BASELINE=1`.
 
 ## Independence
 
