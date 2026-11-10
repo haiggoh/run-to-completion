@@ -91,6 +91,23 @@ You are a free-lane session with no chat history. This file is your whole brief.
 - *decision:* `/bin/bash` is 3.2.57 here. `timeout`/`gtimeout` exist on THIS machine only via Homebrew coreutils;
   rtc-ship is published, so neither the script nor its tests may depend on them. The tests' 30 s guard is
   plain bash: run the gate in the background, a background `sleep 30` + `kill` of that pid, `wait`.
+- *decision (user + planner, 2026-11-10):* NO soft dependency on `timeout(1)`, not even "use it when present".
+  (1) It is a fixed wall-clock deadline, the wrong signal: it kills a slow healthy suite and still makes a
+  stuck one wait the full time — the watchdog decides on PROGRESS (log + CPU). (2) Two behaviours = the
+  fallback goes untested on this machine. (3) GNU `timeout` signals its direct child; xdist grandchildren
+  can survive — `watch_gate` kills the whole tree explicitly.
+- *decision (playbook `~/.claude/plans/_playbooks/Playbook-split-monolithic-test-suites.md`):* the new tests
+  are SPLIT from the start. Each stall case waits ≥ stall window + poll + kill grace, so one file would take
+  ~90 s while the repo's whole parallel gate runs in ~18–32 s — it would become the floor of every gate.
+  Rig in `tests/lib/stall_rig.sh` (NOT matched by `tests/test_*.sh`; sourced; each file its own `mktemp -d`;
+  one shared summary function computing the exit status). Files by theme, each ≤ the repo's next-slowest
+  file (measure in Phase 0): `tests/test_stall_detect.sh` (stall named, `.stall` content, no argv leak,
+  `tree_cpu` parsing), `tests/test_stall_progress.sh` (busy-silent, logging-sleep — the "not a stall" cases),
+  `tests/test_stall_scope.sh` (foreign processes survive, bad overrides abort), `tests/test_gate_supervision.sh`
+  (Task 2: stdin, pre-flight + default-pytest stalls), `tests/test_gate_baseline.sh` (Task 3). Wherever the
+  plan below says `tests/test_stall_watchdog.sh`, put the case in the matching themed file instead.
+- *decision:* tests-only knob `RTC_STALL_KILL_GRACE` (seconds between TERM and KILL, default 5; documented
+  "tests only" like `RTC_STALL_POLL`); tests set it to 1.
 - *dated observation (2026-11-06/07, memory):* real free-agents gates wedged at 0% CPU with a frozen log; root
   cause never identified. Do not claim this plan fixes that cause — it makes the stall visible and bounded.
 - *unknown to inspect in Phase 0:* exact `ps -o time=` format on this macOS (expected `m:ss.cc`), and
@@ -119,7 +136,7 @@ test's own pids and removes its dirs). Nothing touches the network, real repos, 
       the next stalled ship once Task 4 is done.
 - [ ] `pwd` = the worktree; `git status --porcelain` empty; `git log --oneline -2` shows `029f456` on `c0763c8`.
 - [ ] Probe the unknowns: `sleep 5 & ps -o time= -p $!; pgrep -P $$ >/dev/null; echo pgrep=$?` — record the format.
-- [ ] Baseline, both green, results recorded: `bash tests/test_gates.sh; echo exit=$?` and the repo gate
+- [ ] Baseline, both green, results recorded (also time EACH tests/test_*.sh alone — the split playbook needs the per-file table): `bash tests/test_gates.sh; echo exit=$?` and the repo gate
       `parallel --will-cite -j 12 bash ::: tests/test_*.sh > /tmp/rtc-base.log 2>&1; echo exit=$?`.
 - [ ] `python3 ~/.claude/plugins/cache/haiggoh/free-agents/*/bin/free-agent-tool.py --list` (pick the highest
       version dir): record which free reviewer lanes are available for the QC milestones. None ⇒ say so
@@ -215,6 +232,10 @@ failed AND `RTC_BASELINE=1`); extend tests; README + header docs.
       `feat(rtc-ship): RTC_BASELINE=1 labels failed-gate lines branch-only vs pre-existing`.
 
 ### Task 4: docs, version, full suite
+
+- [ ] Per-file timing (playbook step 1/6): time each `tests/test_*.sh` alone; record the five slowest. No new
+      stall file may be the slowest file in the suite; if one is, split it again by theme. Receipt: the table
+      before (Phase 0 baseline) and after, plus the repo gate's wall time before and after.
 
 - [ ] README: a "When a gate stalls" section — what `STALLED` means, where `.stall` lives, `RTC_STALL_SECONDS`,
       `stall_seconds`, `RTC_BASELINE=1`, and that `RTC_SKIP_TESTS=1` is no longer the stall workaround.
