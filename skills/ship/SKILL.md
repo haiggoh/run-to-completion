@@ -53,6 +53,9 @@ the verdicts. It does not re-implement any loop step.
   approval (delete + recreate), otherwise fix forward in the next version.
 - Ask the depth question every time — an earlier "you may push" does not cover merge,
   tag or release.
+- No known errors at release (user rule 2026-11-01): the full gate suite runs on the
+  exact tree being tagged; a pre-existing failure found mid-work is fixed or the release
+  is held — never shipped around, and never shipped as a "known issue" note.
 
 ## When NOT to use
 
