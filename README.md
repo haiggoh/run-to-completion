@@ -346,6 +346,19 @@ gate did not start are untouched.
 
 - `RTC_STALL_SECONDS` / `stall_seconds` in `rtc-ship.json` — the stall window (env > config >
   600 s default); a set-but-invalid value aborts the gate naming its source.
+- `RTC_STALL_RETRIES` / `stall_retries` in `rtc-ship.json` — how often a STALLED gate is re-run
+  (env > config > **1**; `0` = never retry, the pre-1.4.0 behaviour). A set-but-invalid value
+  exits **2** naming the key before any gate launches. On a stall the gate is re-run once: a
+  retry that passes prints `⚠ <gate> STALLED once — passed on retry` plus a run summary, counts
+  as a pass (tree stamped), and keeps the first attempt as `<log>.attempt1` /
+  `<log>.attempt1.stall` — the artefacts dir is kept on recovered green runs so the promised
+  diagnosis path exists. A second stall exits 124 as before; a retry that fails normally is rc 1
+  with both logs; only the stalled gate is re-run, never the whole set.
+- The `.stall` report of a pytest gate also carries the per-test timeout dump under a
+  `-- per-test timeout dump --` section (the first dump, bounded at 200 lines) — the stack that
+  names the wedged test. And a gate whose largest `--timeout=N` is ≥ the stall window gets a
+  `⚠ <gate>: per-test --timeout=Ns ≥ stall window Ss` line before it launches: the watchdog
+  kills a stalled gate first, so a dump at that timeout could never print otherwise.
 - `RTC_BASELINE=1` — see above.
 - `RTC_SKIP_TESTS=1` is **no longer the stall workaround** — the watchdog ends a stuck gate in
   bounded time, with a diagnosis file.

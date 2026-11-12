@@ -77,4 +77,17 @@ else
   ok "the TERM-ignoring gate was KILLed after the grace"
 fi
 
+echo "== docs pin the new stall-recovery surface (1.4.0) =="
+help=$(bash "$ROOT/bin/rtc-ship.sh" --help 2>&1)
+has "--help pins RTC_STALL_RETRIES" "$help" "RTC_STALL_RETRIES"
+has "--help pins the stall_retries config key" "$help" "stall_retries"
+readme=$(cat "$ROOT/README.md")
+has "README stall section pins RTC_STALL_RETRIES" "$readme" "RTC_STALL_RETRIES"
+has "README pins the recovered-stall line" "$readme" "STALLED once — passed on retry"
+has "README pins the .stall timeout-dump section" "$readme" "per-test timeout dump"
+has "README pins the per-test timeout warning" "$readme" "per-test --timeout="
+shipmd=$(cat "$ROOT/skills/ship/SKILL.md")
+has "ship skill: a STALLED gate is retried once, read .attempt1.stall" "$shipmd" "attempt1.stall"
+has "ship skill: never hand-run gates with RTC_SKIP_TESTS=1" "$shipmd" "RTC_SKIP_TESTS=1"
+
 rig_summary

@@ -56,6 +56,9 @@ the verdicts. It does not re-implement any loop step.
 - No known errors at release (user rule 2026-11-01): the full gate suite runs on the
   exact tree being tagged; a pre-existing failure found mid-work is fixed or the release
   is held — never shipped around, and never shipped as a "known issue" note.
+- A STALLED gate is retried once automatically (read `<log>.attempt1.stall` for the cause);
+  never hand-run gates with `RTC_SKIP_TESTS=1` to get past one — use
+  `rtc-ship.sh --test-only <worktree>`.
 
 ## When NOT to use
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.4.0] — 2026-11-12 — stall self-recovery: a STALLED gate retries once and names its cause
+
+- **Added:** a STALLED gate is re-run ONCE automatically (`stall_retries` in rtc-ship.json /
+  `RTC_STALL_RETRIES`, env > config > 1; `0` = never retry, the pre-1.4.0 behaviour; a
+  set-but-invalid value exits 2 naming the key before any gate launches). A retry that passes
+  prints `⚠ <gate> STALLED once — passed on retry` plus a `⚠ recovered stalls this run:` summary,
+  counts as a pass (the tree is stamped), and keeps the first attempt as `<log>.attempt1` /
+  `<log>.attempt1.stall` (kept on recovered green runs too, so the diagnosis path exists). A
+  second stall still exits 124; a retry that fails normally is rc 1 with both logs kept; only
+  the stalled gate is re-run, never the whole set; the baseline gate is never retried.
+- **Added:** the `.stall` diagnosis of a pytest gate now carries the per-test timeout dump under
+  a `-- per-test timeout dump --` section (first dump, bounded at 200 lines) — the stack that
+  names the wedged test, which the watchdog's window previously always beat.
+- **Added:** a `⚠ <gate>: per-test --timeout=Ns ≥ stall window Ss` phase line is printed before
+  any gate whose largest `--timeout` meets or exceeds the stall window launches (scanned in
+  `test_cmd` and in `.rtc/pre-flight.sh`).
+- **Docs/skills:** README stall section, `--help` env list, and the `ship` skill rule updated;
+  also folds the standing user-rule primers into `skills/ship/SKILL.md` (no known errors at
+  release) and `skills/writing-execution-plans/SKILL.md` (native plan execution).
+
 ## [1.3.1] — 2026-11-10 — test hardening for the exit-code vocabulary (QC milestone)
 
 - **Tests:** `tests/test_ship_exit_codes.sh` grew from 4 to 15 assertions after an out-of-family
