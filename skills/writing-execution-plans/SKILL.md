@@ -56,7 +56,8 @@ None of these? The base plan is enough; do not add this layer for ceremony.
 ## Writing for the executor
 
 Execution method is NATIVE by standing user decision (2026-11-05): the plan header names
-`superpowers:executing-plans`, the executor implements every task in its own session plus one final
+the `executing-plans` skill of the general plan-writing plugin (the one this layer builds on),
+the executor implements every task in its own session plus one final
 whole-branch review; never offer the subagent-driven alternative at handoff (memory: plans-execute-native).
 
 Write standing rules blunt and numbered: the executor has no incident context, so a ban may outrun its
