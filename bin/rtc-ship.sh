@@ -118,6 +118,25 @@ stall_seconds() {  # the stall window in seconds: RTC_STALL_SECONDS > rtc-ship.j
   printf '%s\n' "$v"
 }
 
+timeout_vs_stall_warn() {  # timeout_vs_stall_warn <label> <text> — if <text> carries a per-test
+                           # --timeout[= ]<N> with N >= the stall window, print a ⚠ phase line
+                           # naming both numbers: the watchdog always kills a stalled gate first,
+                           # so a pytest-timeout dump at that N can never print. The LARGEST N
+                           # wins; --timeout-method=… is not a timeout. Never changes rc.
+  local label=$1 text=$2 tok n best=0 stall
+  stall=$(stall_seconds) || return 0
+  for tok in $(printf '%s' "$text" | grep -oE -- '--timeout[= ][0-9]+' 2>/dev/null); do
+    n=${tok##*[= ]}
+    case "$n" in ''|*[!0-9]*) continue ;; esac
+    if [ "$n" -gt "$best" ]; then best=$n; fi
+  done
+  [ "$best" -gt 0 ] || return 0
+  if [ "$best" -ge "$stall" ]; then
+    phase "⚠ $label: per-test --timeout=${best}s ≥ stall window ${stall}s"
+  fi
+  return 0
+}
+
 tree_pids() {  # tree_pids <pid> — the pid and every descendant pid, one per line (recursive pgrep -P)
   local c
   printf '%s\n' "$1"
@@ -578,6 +597,7 @@ gates() {
   # ~2 minutes for it. Its output goes to a log and is shown when it fails.
   local pf_pid=""
   if [ -x .rtc/pre-flight.sh ]; then
+    timeout_vs_stall_warn "pre-flight gates" "$(cat .rtc/pre-flight.sh)"
     ./.rtc/pre-flight.sh </dev/null >"$d/pre-flight" 2>&1 &
     pf_pid=$!
   fi
@@ -586,6 +606,7 @@ gates() {
   # command comes from the config, and an UNCOLLECTED suite is a failure, never a silent pass.
   local test_cmd; test_cmd=$(cfg_get "test_cmd" "")
   if [ -n "$test_cmd" ]; then
+    timeout_vs_stall_warn "tests (config)" "$test_cmd"
     bash -c "$test_cmd" </dev/null >"$d/main" 2>&1 &
     cpid=$!
     if watch_gate "tests (config)" "$d/main" "$cpid"; then phase "tests (config): pass"
