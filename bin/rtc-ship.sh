@@ -53,6 +53,11 @@
 #                       and failed as STALLED (default 600; rtc-ship.json "stall_seconds" sits
 #                       between this env var and the default in precedence)
 #   RTC_STALL_POLL      (tests only) seconds between the watchdog's stall samples (default 15)
+#   RTC_STALL_RETRIES   how often a STALLED gate is re-run (default 1; 0 = never retry, the
+#                       pre-1.4.0 behaviour; rtc-ship.json "stall_retries" sits between this env
+#                       var and the default). A SET but invalid value exits 2 naming the key,
+#                       before any gate launches. A stall that passes on retry is reported loudly
+#                       (⚠ recovered line + <log>.attempt1 / <log>.attempt1.stall kept).
 #   RTC_BASELINE=1      after a failed gate, re-run that gate on origin/<default> in a throwaway
 #                       worktree and label its failed lines branch-only vs pre-existing
 #                       (diagnosis only — the gate still fails)
@@ -114,6 +119,19 @@ stall_seconds() {  # the stall window in seconds: RTC_STALL_SECONDS > rtc-ship.j
   else v=$(cfg_get "stall_seconds" "600"); src='rtc-ship.json "stall_seconds"'; fi
   case "$v" in
     ''|*[!0-9]*|0) echo "✖ $src must be a positive integer (seconds), got '$v'" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$v"
+}
+
+stall_retries() {  # how often a STALLED gate is re-run: RTC_STALL_RETRIES > rtc-ship.json
+                   # "stall_retries" > 1. Non-negative integer only (0 = never retry, the pre-1.4.0
+                   # behaviour); anything else is a config error: return 1, and gates() turns that
+                   # into exit 2 at the door, before any gate launches (same rule as stall_seconds).
+  local v src
+  if [ -n "${RTC_STALL_RETRIES:-}" ]; then v=$RTC_STALL_RETRIES; src="RTC_STALL_RETRIES"
+  else v=$(cfg_get "stall_retries" "1"); src='rtc-ship.json "stall_retries"'; fi
+  case "$v" in
+    ''|*[!0-9]*) echo "✖ $src must be a non-negative integer, got '$v'" >&2; return 1 ;;
   esac
   printf '%s\n' "$v"
 }
@@ -244,6 +262,46 @@ watch_gate() {  # watch_gate <label> <log> <pid> — wait for the gate command; 
     last_size=$size; last_cpu=$cpu
     sleep "$poll"
   done
+}
+
+rerun_gate() {  # rerun_gate <label> <log> <cmd> — keep the first attempt's artefacts
+               # (<log>→<log>.attempt1, <log>.stall→<log>.attempt1.stall), relaunch the gate,
+               # return watch_gate's rc for the retry.
+  local label=$1 log=$2 cmd=$3 pid wrc
+  if [ -f "$log" ]; then mv "$log" "$log.attempt1"; fi
+  if [ -f "$log.stall" ]; then mv "$log.stall" "$log.attempt1.stall"; fi
+  bash -c "$cmd" </dev/null >"$log" 2>&1 &
+  pid=$!
+  wrc=0; watch_gate "$label" "$log" "$pid" || wrc=$?
+  return "$wrc"
+}
+
+watch_maybe_retry() {  # watch_maybe_retry <label> <log> <cmd> <pid> — watch a RUNNING gate; on a
+                       # stall with retries left, re-run it ONCE via rerun_gate (only that gate —
+                       # never the whole set). Sets GATE_RC (0 pass / 124 final stall / other =
+                       # ordinary failure) and GATE_RECOVERED=1 when the retry passed. Always
+                       # returns 0: classification is the caller's.
+  local label=$1 log=$2 cmd=$3 pid=$4 retries wrc
+  GATE_RECOVERED=0
+  retries=$(stall_retries) || { GATE_RC=2; return 0; }
+  wrc=0; watch_gate "$label" "$log" "$pid" || wrc=$?
+  if [ "$wrc" = 124 ] && [ "$retries" -gt 0 ]; then
+    phase "⚠ $label STALLED — retrying once (first attempt kept as ${log}.attempt1 / ${log}.attempt1.stall)"
+    wrc=0; rerun_gate "$label" "$log" "$cmd" || wrc=$?
+    if [ "$wrc" = 0 ]; then
+      GATE_RECOVERED=1
+      phase "⚠ $label STALLED once — passed on retry (diagnosis kept in ${log}.attempt1.stall)"
+    fi
+  fi
+  GATE_RC=$wrc
+  return 0
+}
+
+gate_once() {  # gate_once <label> <log> <cmd> — launch <cmd> and watch it with the stall retry
+  local label=$1 log=$2 cmd=$3 pid
+  bash -c "$cmd" </dev/null >"$log" 2>&1 &
+  pid=$!
+  watch_maybe_retry "$label" "$log" "$cmd" "$pid"
 }
 
 _gate_fail_keys() {  # _gate_fail_keys <log> — the test keys of FAILED/ERROR (pytest) and "  FAIL " lines
@@ -572,7 +630,7 @@ worktree_tree() {  # the tree id of what the suites will actually read: the WORK
 
 gates() {
   local tree stamp d rc=0 pids=() names=() out
-  local stall_seen=0 wrc cpid failed_label="" failed_log=""
+  local stall_seen=0 wrc failed_label="" failed_log="" stalls_recovered=""
   tree=$(worktree_tree) || { echo "✖ could not hash the working tree for the test stamp" >&2; return 1; }
   stamp="$(git rev-parse --git-common-dir)/rtc-tested/$tree"
   if [ -e "$stamp" ]; then
@@ -583,6 +641,9 @@ gates() {
   # (naming its source), never after its gate command is already running — that would orphan the
   # command this function is about to supervise.
   stall_seconds >/dev/null || return 1
+  # The retry count is resolved at the same door: a SET but invalid value is a CONFIG error —
+  # return 2 (exit 2 at every caller) before any gate launches, never a silent default.
+  stall_retries >/dev/null || return 2
   # Worker count: env, then rtc-ship.json's test_workers, then 12. The config key was documented
   # and never read (2026-10-27) — a SET but invalid value now aborts rather than falling through.
   local workers src
@@ -607,36 +668,40 @@ gates() {
   local test_cmd; test_cmd=$(cfg_get "test_cmd" "")
   if [ -n "$test_cmd" ]; then
     timeout_vs_stall_warn "tests (config)" "$test_cmd"
-    bash -c "$test_cmd" </dev/null >"$d/main" 2>&1 &
-    cpid=$!
-    if watch_gate "tests (config)" "$d/main" "$cpid"; then phase "tests (config): pass"
+    gate_once "tests (config)" "$d/main" "$test_cmd"
+    wrc=$GATE_RC
+    if [ "$GATE_RECOVERED" = 1 ]; then
+      stalls_recovered="$stalls_recovered tests (config)"
+      phase "tests (config): pass (after one recovered stall)"
+    elif [ "$wrc" = 0 ]; then phase "tests (config): pass"
+    elif [ "$wrc" = 124 ]; then
+      rc=1; stall_seen=1; failed_label="tests (config)"; failed_log="$d/main"
+      phase "✖ tests (config) STALLED — diagnosis in $d/main.stall"
     else
-      wrc=$?
-      if [ "$wrc" = 124 ]; then
-        rc=1; stall_seen=1; failed_label="tests (config)"; failed_log="$d/main"
-        phase "✖ tests (config) STALLED — diagnosis in $d/main.stall"
-      else
-        rc=1; failed_label="tests (config)"; failed_log="$d/main"
-        phase "✖ tests (config) FAILED"; grep -E "FAIL|✖" "$d/main" | head -10 >&2
-      fi
+      rc=1; failed_label="tests (config)"; failed_log="$d/main"
+      phase "✖ tests (config) FAILED"; grep -E "FAIL|✖" "$d/main" | head -10 >&2
     fi
   else
     # pytest where it is installed: the pipx location first (where this machine's lives), then PATH,
     # then the active interpreter's module. Never a single hardcoded path (2026-10-25 review).
-    local pyt=()
+    local pyt=() pcmd
     if [ -x "$HOME/.local/bin/pytest" ]; then pyt=("$HOME/.local/bin/pytest")
     elif command -v pytest >/dev/null 2>&1; then pyt=(pytest)
     else pyt=(python3 -m pytest); fi
-    "${pyt[@]}" -q tests -p no:cacheprovider -n "$workers" \
-      </dev/null >"$d/main" 2>&1 &
-    names+=(main); pids+=($!)
+    pcmd=$(printf '%q ' "${pyt[@]}")"-q tests -p no:cacheprovider -n $workers"
+    names+=(main); pids+=(launch)
   fi
   local i
   for i in "${!pids[@]}"; do
     # watch_gate waits FIRST, so the log is complete before it is classified; a stall is named
     # here and resolved to rc 124 at gates()' exit, an ordinary failure classifies as before.
-    wrc=0; watch_gate "pytest ${names[$i]}" "$d/${names[$i]}" "${pids[$i]}" || wrc=$?
-    if [ "$wrc" = 124 ]; then
+    # gate_once adds the single automatic retry of a STALLED gate (stall_retries).
+    gate_once "pytest ${names[$i]}" "$d/${names[$i]}" "$pcmd"
+    wrc=$GATE_RC
+    if [ "$GATE_RECOVERED" = 1 ]; then
+      stalls_recovered="$stalls_recovered pytest ${names[$i]}"
+      phase "pytest ${names[$i]}: pass (after one recovered stall)"
+    elif [ "$wrc" = 124 ]; then
       rc=1; stall_seen=1; failed_label="pytest ${names[$i]}"; failed_log="$d/${names[$i]}"
       phase "✖ pytest ${names[$i]} STALLED — diagnosis in $d/${names[$i]}.stall"
     elif [ "$wrc" != 0 ]; then
@@ -650,13 +715,22 @@ gates() {
     fi
   done
   if [ -n "$pf_pid" ]; then
-    wrc=0; watch_gate "pre-flight gates" "$d/pre-flight" "$pf_pid" || wrc=$?
-    if [ "$wrc" = 124 ]; then
+    watch_maybe_retry "pre-flight gates" "$d/pre-flight" "./.rtc/pre-flight.sh" "$pf_pid"
+    wrc=$GATE_RC
+    if [ "$GATE_RECOVERED" = 1 ]; then
+      stalls_recovered="$stalls_recovered pre-flight gates"
+      phase "pre-flight gates: pass (after one recovered stall)"
+    elif [ "$wrc" = 124 ]; then
       rc=1; stall_seen=1; failed_label="pre-flight gates"; failed_log="$d/pre-flight"
       phase "✖ pre-flight gates STALLED — diagnosis in $d/pre-flight.stall"
     elif [ "$wrc" = 0 ]; then phase "pre-flight gates: pass"
     else rc=1; failed_label="pre-flight gates"; failed_log="$d/pre-flight"
          phase "✖ pre-flight gates FAILED"; tail -30 "$d/pre-flight" >&2; fi
+  fi
+  # A recovered stall is recorded LOUDLY at the end of the run too — never let a retry hide a
+  # real deadlock: the .attempt1.stall reports stay next to the gate logs.
+  if [ -n "$stalls_recovered" ]; then
+    phase "⚠ recovered stalls this run:$stalls_recovered — read the .attempt1.stall reports"
   fi
   # RTC_BASELINE=1: diagnosis only — re-run the failed gate on origin/<default> and label its
   # failed lines branch-only vs pre-existing. Never changes rc.
@@ -668,6 +742,12 @@ gates() {
   if [ "$rc" = 0 ] && [ "$(worktree_tree)" != "$tree" ]; then
     phase "tests passed, but the working tree changed during the run — NOT stamped; rerun to cache it"
     rm -rf "$d"
+  elif [ "$rc" = 0 ] && [ -n "$stalls_recovered" ]; then
+    # Green WITH a recovered stall: the tree IS stamped, but the first attempt's artefacts stay
+    # on disk — the recovered line promised a diagnosis in <log>.attempt1.stall, and cleaning $d
+    # here would turn that promise into a dangling path.
+    mkdir -p "$(dirname "$stamp")"; touch "$stamp"
+    phase "⚠ recovered-stall artefacts kept in $d (not cleaned up: the run was green)"
   elif [ "$rc" = 0 ]; then mkdir -p "$(dirname "$stamp")"; touch "$stamp"; rm -rf "$d"
   else echo "✖ tests failed — full logs kept in $d" >&2; fi
   # A stall is the more urgent failure: 124 (the timeout(1) convention) whenever ANY gate stalled,
