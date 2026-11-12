@@ -53,11 +53,12 @@
 #                       and failed as STALLED (default 600; rtc-ship.json "stall_seconds" sits
 #                       between this env var and the default in precedence)
 #   RTC_STALL_POLL      (tests only) seconds between the watchdog's stall samples (default 15)
-#   RTC_STALL_RETRIES   how often a STALLED gate is re-run (default 1; 0 = never retry, the
-#                       pre-1.4.0 behaviour; rtc-ship.json "stall_retries" sits between this env
-#                       var and the default). A SET but invalid value exits 2 naming the key,
-#                       before any gate launches. A stall that passes on retry is reported loudly
-#                       (⚠ recovered line + <log>.attempt1 / <log>.attempt1.stall kept).
+#   RTC_STALL_RETRIES   whether a STALLED gate is re-run ONCE after a stall (default 1 = retry
+#                       once; 0 = never retry, the pre-1.4.0 behaviour; values > 1 still mean one
+#                       retry; rtc-ship.json "stall_retries" sits between this env var and the
+#                       default). A SET but invalid value exits 2 naming the key, before any gate
+#                       launches. A stall that passes on retry is reported loudly (⚠ recovered
+#                       line + <log>.attempt1 / <log>.attempt1.stall kept).
 #   RTC_BASELINE=1      after a failed gate, re-run that gate on origin/<default> in a throwaway
 #                       worktree and label its failed lines branch-only vs pre-existing
 #                       (diagnosis only — the gate still fails)
