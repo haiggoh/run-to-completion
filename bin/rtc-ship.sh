@@ -175,6 +175,20 @@ kill_tree() {  # kill_tree <pid> — TERM the gate's tree, then KILL whatever su
   :
 }
 
+stall_dump_block() {  # stall_dump_block <log> — the per-test timeout dump (pytest-timeout's
+                      # "++++ Timeout ++++" header line plus the "~~~ Stack of …" frames) copied
+                      # from the FIRST header line, bounded at 200 lines. Prints the section
+                      # header "-- per-test timeout dump --" first; prints NOTHING when the log
+                      # has no dump marker (a plain stall has none). Always returns 0: a missing
+                      # or unreadable log simply means "no dump".
+  awk '
+    !found && substr($0, 1, 1) == "+" && index($0, " Timeout ") > 0 {
+      found = 1; print "-- per-test timeout dump --"
+    }
+    found { print; n++; if (n >= 200) exit }
+  ' "$1" 2>/dev/null || :
+}
+
 watch_gate() {  # watch_gate <label> <log> <pid> — wait for the gate command; return its exit
                 # status, or 124 after a stall, having written <log>.stall and killed the tree.
                 # Stall = BOTH the log size and the tree CPU unchanged across consecutive samples
@@ -201,6 +215,9 @@ watch_gate() {  # watch_gate <label> <log> <pid> — wait for the gate command; 
         ps -o pid=,ppid=,stat=,etime=,time=,comm= \
           -p "$(tree_pids "$pid" | paste -s -d, -)" 2>/dev/null || :
         tail -n 30 "$log" 2>/dev/null || :
+        # The per-test timeout dump rides along: when a pytest gate's --timeout fired, this is the
+        # stack that names the wedged test (the watchdog's own window usually kills the gate first).
+        stall_dump_block "$log"
       } >"$log.stall"
       kill_tree "$pid"
       return 124
