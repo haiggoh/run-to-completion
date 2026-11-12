@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.4.1] — unreleased
+
+### Fixed
+- `gates()` end block: a recovered stall whose tree changed mid-run now KEEPS the gate-log dir
+  (with `<log>.attempt1` / `<log>.attempt1.stall`), so the printed diagnosis path never dangles
+  (validator minor M4; pinned by the `tree_changed_recovery` case in `tests/test_stall_retry.sh`,
+  red→green).
+- Exit-code consistency (validator minor M2): a set-but-invalid `RTC_STALL_SECONDS` /
+  `stall_seconds` / `RTC_TEST_WORKERS` / `test_workers` now exits **2** — a config error,
+  matching the documented vocabulary — instead of 1; same as `stall_retries` since 1.4.0.
+  Pins updated in `tests/test_stall_scope.sh` / `tests/test_gates.sh` (mutation-checked).
+- `gate_once` resolves `stall_retries` BEFORE forking the gate (validator minor M3): an invalid
+  value returns 2 with no gate launched, never leaving a running gate unsupervised.
+  Unit-pinned in `tests/test_stall_retry.sh` (mutation: fork-before-resolve goes red).
+
 ## [1.4.0] — 2026-11-12 — stall self-recovery: a STALLED gate retries once and names its cause
 
 - **Added:** a STALLED gate is re-run ONCE automatically (`stall_retries` in rtc-ship.json /

@@ -114,4 +114,34 @@ has "preflight_only_retried: the pre-flight recovered line" "$out" \
 n=$(wc -l < "$TMP/po/log/main.count" 2>/dev/null | tr -d ' '); [ -n "$n" ] || n=0
 is "preflight_only_retried: main suite ran EXACTLY once" "1" "$n"
 
+echo "== a recovered stall with the tree changed mid-run still keeps the artefacts (M4) =="
+mkrepo "$TMP/tc" '{"tag_prefix":"v","test_cmd":"if [ ! -f \"$GATES_LOG/once\" ]; then touch \"$GATES_LOG/once\"; exec sleep 300; fi; echo dirty >> dirty.txt; echo ok"}'
+stall_gate "$TMP/tc" RTC_STALL_SECONDS=3 RTC_STALL_POLL=1 RTC_STALL_KILL_GRACE=1
+out=$(cat "$TMP/tc/log/out")
+is "tree_changed_recovery: rc 0" "0" "$RIG_RC"
+has "tree_changed_recovery: recovered line" "$out" "STALLED once — passed on retry"
+has "tree_changed_recovery: NOT stamped (tree changed mid-run)" "$out" "NOT stamped"
+p=$(sed -n 's/.*diagnosis kept in //p' "$TMP/tc/log/out" | head -1); p=${p%)}
+if [ -n "$p" ] && [ -f "$p" ]; then ok "tree_changed_recovery: .attempt1.stall kept despite the tree change ($p)"
+else bad "tree_changed_recovery: .attempt1.stall kept despite the tree change" "a real file" "${p:-<none printed>}"; fi
+shopt -s nullglob
+st=("$TMP/tc/.git/rtc-tested/"*)
+shopt -u nullglob
+if [ ${#st[@]} -eq 0 ]; then ok "tree_changed_recovery: no stamp written"; else bad "tree_changed_recovery: no stamp written" "none" "${#st[@]} stamp(s)"; fi
+
+echo "== gate_once resolves stall_retries BEFORE forking (M3): invalid value, no gate launched =="
+(
+  eval "$(rig_one_fn "$ROOT/bin/rtc-ship.sh" gate_once)"
+  eval "$(rig_one_fn "$ROOT/bin/rtc-ship.sh" watch_maybe_retry)"
+  # Stub for dynamic dispatch: gate_once calls stall_retries by name, which static analysis
+  # cannot see — that indirect invocation is the point of this stub.
+  # shellcheck disable=SC2329
+  stall_retries() { echo "✖ stub stall_retries: must be a non-negative integer, got 'x'" >&2; return 1; }
+  gate_once "unit" "$TMP/unit-gate.log" "true"
+  echo "rc=$?"
+) > "$TMP/unit.out" 2>"$TMP/unit.err"
+is "gate_once with invalid stall_retries returns 2" "rc=2" "$(cat "$TMP/unit.out")"
+if [ -f "$TMP/unit-gate.log" ]; then bad "gate_once forked nothing on invalid config" "no log file" "$TMP/unit-gate.log exists"; else ok "gate_once forked nothing on invalid config"; fi
+has "  and the error names the key" "$(cat "$TMP/unit.err")" "stall_retries"
+
 rig_summary

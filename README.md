@@ -345,7 +345,8 @@ lines. Only the gate's own process tree is killed (TERM, then KILL after a grace
 gate did not start are untouched.
 
 - `RTC_STALL_SECONDS` / `stall_seconds` in `rtc-ship.json` — the stall window (env > config >
-  600 s default); a set-but-invalid value aborts the gate naming its source.
+  600 s default); a set-but-invalid value aborts the gate naming its source, as a config error
+  (exit **2**, like `stall_retries` and `test_workers`).
 - `RTC_STALL_RETRIES` / `stall_retries` in `rtc-ship.json` — whether a STALLED gate is re-run
   **once** (env > config > **1**; `0` = never retry, the pre-1.4.0 behaviour; values > 1 still
   mean one retry). A set-but-invalid value

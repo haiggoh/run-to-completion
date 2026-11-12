@@ -277,14 +277,15 @@ rerun_gate() {  # rerun_gate <label> <log> <cmd> — keep the first attempt's ar
   return "$wrc"
 }
 
-watch_maybe_retry() {  # watch_maybe_retry <label> <log> <cmd> <pid> — watch a RUNNING gate; on a
-                       # stall with retries left, re-run it ONCE via rerun_gate (only that gate —
-                       # never the whole set). Sets GATE_RC (0 pass / 124 final stall / other =
-                       # ordinary failure) and GATE_RECOVERED=1 when the retry passed. Always
+watch_maybe_retry() {  # watch_maybe_retry <label> <log> <cmd> <pid> <retries> — watch a RUNNING
+                       # gate; on a stall with retries left, re-run it ONCE via rerun_gate (only
+                       # that gate — never the whole set). Sets GATE_RC (0 pass / 124 final stall /
+                       # other = ordinary failure) and GATE_RECOVERED=1 when the retry passed.
+                       # <retries> is resolved by the CALLER before any fork: a config error must
+                       # never leave a launched gate unsupervised (validator minor M3). Always
                        # returns 0: classification is the caller's.
-  local label=$1 log=$2 cmd=$3 pid=$4 retries wrc
+  local label=$1 log=$2 cmd=$3 pid=$4 retries=$5 wrc
   GATE_RECOVERED=0
-  retries=$(stall_retries) || { GATE_RC=2; return 0; }
   wrc=0; watch_gate "$label" "$log" "$pid" || wrc=$?
   if [ "$wrc" = 124 ] && [ "$retries" -gt 0 ]; then
     phase "⚠ $label STALLED — retrying once (first attempt kept as ${log}.attempt1 / ${log}.attempt1.stall)"
@@ -298,11 +299,13 @@ watch_maybe_retry() {  # watch_maybe_retry <label> <log> <cmd> <pid> — watch a
   return 0
 }
 
-gate_once() {  # gate_once <label> <log> <cmd> — launch <cmd> and watch it with the stall retry
-  local label=$1 log=$2 cmd=$3 pid
+gate_once() {  # gate_once <label> <log> <cmd> — launch <cmd> and watch it with the stall retry.
+               # Resolves stall_retries BEFORE the fork: an invalid value returns 2 with NO gate
+               # launched (M3), instead of leaving a running gate unsupervised.
+  local label=$1 log=$2 cmd=$3 retries
+  retries=$(stall_retries) || return 2
   bash -c "$cmd" </dev/null >"$log" 2>&1 &
-  pid=$!
-  watch_maybe_retry "$label" "$log" "$cmd" "$pid"
+  watch_maybe_retry "$label" "$log" "$cmd" "$!" "$retries"
 }
 
 _gate_fail_keys() {  # _gate_fail_keys <log> — the test keys of FAILED/ERROR (pytest) and "  FAIL " lines
@@ -639,9 +642,10 @@ gates() {
     return 0
   fi
   # The stall window is resolved BEFORE anything launches: a SET but invalid override aborts here
-  # (naming its source), never after its gate command is already running — that would orphan the
-  # command this function is about to supervise.
-  stall_seconds >/dev/null || return 1
+  # (naming its source) as a CONFIG error — exit 2 at every caller, matching the header vocabulary —
+  # never after its gate command is already running, which would orphan the command this function
+  # is about to supervise.
+  stall_seconds >/dev/null || return 2
   # The retry count is resolved at the same door: a SET but invalid value is a CONFIG error —
   # return 2 (exit 2 at every caller) before any gate launches, never a silent default.
   stall_retries >/dev/null || return 2
@@ -651,7 +655,7 @@ gates() {
   if [ -n "${RTC_TEST_WORKERS:-}" ]; then workers=$RTC_TEST_WORKERS; src=RTC_TEST_WORKERS
   else workers=$(cfg_get "test_workers" "12"); src="rtc-ship.json test_workers"; fi
   case "$workers" in
-    ''|*[!0-9]*|0) echo "✖ $src must be a positive integer, got '$workers'" >&2; return 1 ;;
+    ''|*[!0-9]*|0) echo "✖ $src must be a positive integer, got '$workers'" >&2; return 2 ;;
   esac
   d=$(mktemp -d)
   # Pre-flight runs ALONGSIDE the main suite, not before it: its suites are the ones the main
@@ -669,7 +673,7 @@ gates() {
   local test_cmd; test_cmd=$(cfg_get "test_cmd" "")
   if [ -n "$test_cmd" ]; then
     timeout_vs_stall_warn "tests (config)" "$test_cmd"
-    gate_once "tests (config)" "$d/main" "$test_cmd"
+    gate_once "tests (config)" "$d/main" "$test_cmd" || return 2
     wrc=$GATE_RC
     if [ "$GATE_RECOVERED" = 1 ]; then
       stalls_recovered="$stalls_recovered tests (config)"
@@ -697,7 +701,7 @@ gates() {
     # watch_gate waits FIRST, so the log is complete before it is classified; a stall is named
     # here and resolved to rc 124 at gates()' exit, an ordinary failure classifies as before.
     # gate_once adds the single automatic retry of a STALLED gate (stall_retries).
-    gate_once "pytest ${names[$i]}" "$d/${names[$i]}" "$pcmd"
+    gate_once "pytest ${names[$i]}" "$d/${names[$i]}" "$pcmd" || return 2
     wrc=$GATE_RC
     if [ "$GATE_RECOVERED" = 1 ]; then
       stalls_recovered="$stalls_recovered pytest ${names[$i]}"
@@ -716,7 +720,9 @@ gates() {
     fi
   done
   if [ -n "$pf_pid" ]; then
-    watch_maybe_retry "pre-flight gates" "$d/pre-flight" "./.rtc/pre-flight.sh" "$pf_pid"
+    local retries
+    retries=$(stall_retries) || return 2
+    watch_maybe_retry "pre-flight gates" "$d/pre-flight" "./.rtc/pre-flight.sh" "$pf_pid" "$retries"
     wrc=$GATE_RC
     if [ "$GATE_RECOVERED" = 1 ]; then
       stalls_recovered="$stalls_recovered pre-flight gates"
@@ -742,7 +748,13 @@ gates() {
   # started on nor the one now on disk is proven green.
   if [ "$rc" = 0 ] && [ "$(worktree_tree)" != "$tree" ]; then
     phase "tests passed, but the working tree changed during the run — NOT stamped; rerun to cache it"
-    rm -rf "$d"
+    if [ -n "$stalls_recovered" ]; then
+      # Same dangling-promise rule as the recovered-green branch below: the run's own output named
+      # <log>.attempt1.stall, so keep $d even though the tree is not stamped.
+      phase "⚠ recovered-stall artefacts kept in $d (tree changed mid-run; not stamped)"
+    else
+      rm -rf "$d"
+    fi
   elif [ "$rc" = 0 ] && [ -n "$stalls_recovered" ]; then
     # Green WITH a recovered stall: the tree IS stamped, but the first attempt's artefacts stay
     # on disk — the recovered line promised a diagnosis in <log>.attempt1.stall, and cleaning $d

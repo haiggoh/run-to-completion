@@ -76,12 +76,12 @@ is "RTC_TEST_WORKERS beats the config" "0" "$(gate "$TMP/w-env" RTC_TEST_WORKERS
 is "  and pytest got -n 6" "6" "$(workers "$TMP/w-env")"
 
 mkrepo "$TMP/w-badcfg" '"lots"'
-is "a non-numeric test_workers FAILS the gate" "1" "$(gate "$TMP/w-badcfg")"
+is "a non-numeric test_workers is a CONFIG error: exit 2" "2" "$(gate "$TMP/w-badcfg")"
 has "  naming the key" "$(cat "$TMP/w-badcfg/log/out")" "test_workers"
 is "  and never reaches pytest" "0" "$( [ -f "$TMP/w-badcfg/log/pytest.argv" ] && echo 1 || echo 0)"
 
 mkrepo "$TMP/w-badenv"
-is "a non-numeric RTC_TEST_WORKERS fails too" "1" "$(gate "$TMP/w-badenv" RTC_TEST_WORKERS=0)"
+is "a non-numeric RTC_TEST_WORKERS is a CONFIG error too: exit 2" "2" "$(gate "$TMP/w-badenv" RTC_TEST_WORKERS=0)"
 has "  naming the variable" "$(cat "$TMP/w-badenv/log/out")" "RTC_TEST_WORKERS"
 
 echo "== pre-flight runs CONCURRENTLY with the main suite =="
