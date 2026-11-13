@@ -264,5 +264,58 @@ printf 'def test_red():\n    assert False, "deliberately red gate"\n' > "$RED/te
 is "a red suite fails --test-only" "$?" "1"
 is "and says the tests failed" "1" "$(grep -c 'tests failed' "$TMP/red-out")"
 
+# 1.4.2: a worktree on a DETACHED HEAD (what a finished rebase leaves behind) must be refused at
+# the door with the remedy — before it dies at `git merge --ff-only ""` with git's "nothing to
+# merge". Planted positive: the same repo ON A BRANCH must not print that message.
+DET="$TMP/det"; mkrepo "$TMP/det0" main
+cp -r "$TMP/det0" "$DET"; git -C "$DET" checkout -q --detach HEAD
+"$ROOT/bin/rtc-ship.sh" "$DET" 1.0.0 "title" >"$TMP/det-out" 2>&1
+is "a detached-HEAD worktree is refused" "$?" "1"
+is "and the refusal names the detached HEAD" "1" "$(grep -c 'detached HEAD' "$TMP/det-out")"
+is "and prints the remedy (switch -c)" "1" "$(grep -c 'switch -c' "$TMP/det-out")"
+BR2="$TMP/br"; mkrepo "$TMP/br0" main; cp -r "$TMP/br0" "$BR2"
+"$ROOT/bin/rtc-ship.sh" "$BR2" 1.0.0 "title" >"$TMP/br-out" 2>&1
+git -C "$BR2" branch --show-current >/dev/null  # still on the branch
+is "a branch worktree is NOT hit by the detached guard" "0" "$(grep -c 'detached HEAD' "$TMP/br-out")"
+
+# 1.4.2 (waypoint rtc-ship-extra-version-surfaces): extra_version_surfaces are read by the gate
+# AND written by --bump-versions through one shared resolver — the echoprism set: package.json,
+# tauri.conf.json (json), Cargo.toml [package] (toml-package), Cargo.lock (cargo-lock).
+X="$TMP/extra"; mkdir -p "$X/.claude-plugin" "$X/src-tauri"
+printf '{"name":"x","version":"1.0.0"}' > "$X/.claude-plugin/plugin.json"
+printf '# Changelog\n\n## 1.0.0\n\n- old\n' > "$X/CHANGELOG.md"
+printf '{"package":{"name":"x","version":"1.0.0"}}' > "$X/package.json"
+printf '{"package":{"version":"1.0.0"}}' > "$X/src-tauri/tauri.conf.json"
+printf '[package]\nname = "x"\nversion = "1.0.0"\nedition = "2021"\n' > "$X/src-tauri/Cargo.toml"
+printf '[[package]]\nname = "x"\nversion = "1.0.0"\n\n[[package]]\nname = "other"\nversion = "9.9.9"\n' > "$X/src-tauri/Cargo.lock"
+printf '{"manifest":".claude-plugin/plugin.json","changelog":"CHANGELOG.md","extra_version_surfaces":[{"path":"package.json","kind":"json"},{"path":"src-tauri/tauri.conf.json","kind":"json"},{"path":"src-tauri/Cargo.toml","kind":"toml-package"},{"path":"src-tauri/Cargo.lock","kind":"cargo-lock","crate":"x"}]}' > "$X/rtc-ship.json"
+"$ROOT/bin/rtc-ship.sh" --versions-only "$X" >"$TMP/x1" 2>&1
+is "extra surfaces: a consistent tree passes the gate" "$?" "0"
+is "and the gate lists every extra surface" "4" "$(grep -cE '^  (package.json|src-tauri/)' "$TMP/x1")"
+"$ROOT/bin/rtc-ship.sh" --bump-versions "$X" 2.0.0 >/dev/null 2>&1
+is "extra surfaces: bump exits 0" "$?" "0"
+is "json surface bumped (package.json)" "2.0.0" "$(python3 -c "import json;print(json.load(open('$X/package.json'))['package']['version'])" 2>/dev/null || python3 -c "import json;print(json.load(open('$X/package.json'))['version'])")"
+is "json surface bumped (tauri.conf.json)" "2.0.0" "$(python3 -c "import json;print(json.load(open('$X/src-tauri/tauri.conf.json'))['package']['version'])")"
+is "toml-package bumped, other keys intact" "1" "$(grep -c '^edition = "2021"' "$X/src-tauri/Cargo.toml")"
+is "Cargo.toml [package] version bumped" "2.0.0" "$(sed -n '/^\[package\]/,/^\[/p' "$X/src-tauri/Cargo.toml" | sed -n 's/^version = "\(.*\)"/\1/p')"
+is "cargo-lock: the named crate's version bumped" "2.0.0" "$(sed -n '/name = "x"/,/version/p' "$X/src-tauri/Cargo.lock" | sed -n 's/^version = "\(.*\)"/\1/p')"
+is "cargo-lock: the OTHER crate untouched" "9.9.9" "$(sed -n '/name = "other"/,/version/p' "$X/src-tauri/Cargo.lock" | sed -n 's/^version = "\(.*\)"/\1/p')"
+"$ROOT/bin/rtc-ship.sh" --versions-only "$X" >/dev/null 2>&1
+is "gate passes after the bump (all five surfaces agree)" "$?" "0"
+# a split in one extra surface must fail the gate and name it
+printf 'version = "3.0.0"\n' >> "$X/src-tauri/Cargo.toml.tmp"; python3 - "$X/src-tauri/Cargo.toml" <<'PY'
+import re, sys
+p = sys.argv[1]
+t = open(p).read()
+open(p, "w").write(re.sub(r'(?m)^version = "[^"]*"', 'version = "3.0.0"', t, count=1))
+PY
+"$ROOT/bin/rtc-ship.sh" --versions-only "$X" >"$TMP/x2" 2>&1
+is "a split in an extra surface fails the gate" "$?" "1"
+is "and names the disagreeing surface" "1" "$(grep -c 'Cargo.toml says 3.0.0' "$TMP/x2")"
+# a declared-but-absent extra surface fails too
+printf '{"manifest":".claude-plugin/plugin.json","changelog":"CHANGELOG.md","extra_version_surfaces":[{"path":"nope.json","kind":"json"}]}' > "$X/rtc-ship.json"
+"$ROOT/bin/rtc-ship.sh" --versions-only "$X" >"$TMP/x3" 2>&1
+is "a declared-but-absent extra surface fails the gate" "$?" "1"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

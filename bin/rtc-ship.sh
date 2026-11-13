@@ -39,6 +39,10 @@
 #                   branches (reaping is the default).
 #                   "require_default_branch_checkout": true (RECOMMENDED) refuses to ship unless the
 #                   canonical checkout is clean on the default branch; unset, the ship goes around it.
+#                   "extra_version_surfaces": [{"path","kind":json|toml-package|cargo-lock,"crate"?}]
+#                   — additional version surfaces the gate reads AND --bump-versions writes through
+#                   one shared resolver (json = first "version" field; toml-package = [package]
+#                   version; cargo-lock = the [[package]] block named "crate").
 #   .rtc/*.sh       COMMANDS only that repo has, run at named points if present and executable:
 #                     pre-flight.sh     extra gates, before anything else (a second venv's suite)
 #                     pre-package.sh    build the release assets
@@ -389,6 +393,21 @@ else:
 PY
 }
 
+cfg_get_raw() {  # cfg_get_raw <key> [default] — the RAW json value (arrays/objects stay intact)
+  local key=$1 def=${2-} top
+  top=$(resolve_top)
+  RTC_CFG_FILE="$top/rtc-ship.json" python3 - "$key" "$def" <<'PY'
+import json, os, sys
+key, default = sys.argv[1], sys.argv[2]
+try:
+    with open(os.environ["RTC_CFG_FILE"]) as f:
+        v = json.load(f).get(key)
+except Exception:
+    v = None
+print(json.dumps(v) if v is not None else default)
+PY
+}
+
 # ----------------------------------------------------------------------------------------------
 # The version gate. The repo's OWN test wins when it has one; otherwise the config's declared
 # surfaces are checked here. Both paths print the table and both exit non-zero on a split — the
@@ -476,6 +495,106 @@ print("  first version -> %s" % newv)
 PY
 }
 
+extra_surface() {  # extra_surface <top> <surfaces-json> read|write [new-version]
+  # The ONE resolver for extra_version_surfaces, shared by version_gate (read) and bump_versions
+  # (write) — the roadmap_target lesson: two implementations drift (waypoint
+  # rtc-ship-extra-version-surfaces, owner 2026-11-05: echoprism needs package.json +
+  # src-tauri/tauri.conf.json + Cargo.toml [package] + Cargo.lock). Kinds:
+  #   json         {"path", "kind":"json"}                first "version" field, line-preserving
+  #   toml-package {"path", "kind":"toml-package"}        [package] table's version line
+  #   cargo-lock   {"path", "kind":"cargo-lock","crate"}  the [[package]] block named <crate>
+  # read prints "path<TAB>version" per surface; write rewrites each atomically (tmp+os.replace).
+  # An empty extraction or a missing target is a FAILURE (exit non-zero), never a silent pass.
+  python3 - "$@" <<'PY'
+import json, os, re, sys
+top, surfaces_json, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+newv = sys.argv[4] if len(sys.argv) > 4 else None
+if mode not in ("read", "write") or (mode == "write" and not newv):
+    sys.exit("usage: extra_surface <top> <surfaces-json> read|write [new-version]")
+try:
+    surfaces = json.loads(surfaces_json)
+except Exception as exc:
+    sys.exit("✖ extra_version_surfaces is not valid json: %s" % exc)
+if not isinstance(surfaces, list) or not surfaces:
+    sys.exit("✖ extra_version_surfaces must be a non-empty array")
+ver = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+
+def write_atomic(path, data):
+    tmp = path + ".bump-tmp"
+    with open(tmp, "w") as fh:
+        fh.write(data)
+    os.replace(tmp, path)
+
+def resolve(s):
+    """-> (path, current_version_text). In write mode the rewrite is applied AND written
+    atomically HERE, inside the scope that owns `lines` — returning a closure to the caller
+    loses `lines` (NameError, found by the fixture: bump rc=1, surfaces unchanged)."""
+    path = os.path.join(top, s["path"])
+    kind = s.get("kind")
+    if not os.path.isfile(path):
+        sys.exit("✖ %s is declared in extra_version_surfaces but absent" % s["path"])
+    lines = open(path).read().splitlines(keepends=True)
+
+    def emit(i, m):
+        """Rewrite line i's version and (in write mode) persist the file atomically.
+        lines came from splitlines(keepends=True), so lines[i][m.end():] IS the original
+        tail (newline included) — splicing around the match preserves it exactly."""
+        lines[i] = lines[i][:m.start()] + m.group(1) + (newv if mode == "write" else m.group(2)) + m.group(3) + lines[i][m.end():]
+        if mode == "write":
+            write_atomic(path, "".join(lines))
+        return m.group(2)
+
+    if kind == "json":
+        for i, ln in enumerate(lines):
+            if '"version"' in ln:
+                m = re.search(r'("version"\s*:\s*")([^"]*)(")', ln)
+                if m:
+                    return path, emit(i, m)
+        sys.exit("✖ %s: no \"version\" field" % path)
+    if kind == "toml-package":
+        in_pkg = False
+        for i, ln in enumerate(lines):
+            if re.match(r"^\s*\[", ln):
+                in_pkg = bool(re.match(r"^\s*\[package\]\s*$", ln))
+                continue
+            if in_pkg:
+                m = re.match(r'(\s*version\s*=\s*")([^"]*)(")', ln)
+                if m:
+                    return path, emit(i, m)
+        sys.exit("✖ %s: no version line in [package]" % path)
+    if kind == "cargo-lock":
+        crate = s.get("crate")
+        if not crate:
+            sys.exit("✖ cargo-lock surface %s needs a \"crate\"" % s["path"])
+        in_block = False
+        for i, ln in enumerate(lines + [""]):
+            if re.match(r"^\s*\[\[package\]\]\s*$", ln):
+                in_block = True                   # a new block starts; the loop ends at EOF
+                continue
+            if in_block:
+                nm = re.match(r'\s*name\s*=\s*"([^"]*)"', ln)
+                if nm and nm.group(1) == crate:
+                    # the version line follows the name line inside the SAME block: scan ahead
+                    # to the next [[package]] (the appended "" ends the last block at EOF)
+                    for j in range(i + 1, len(lines)):
+                        if re.match(r"^\s*\[\[package\]\]\s*$", lines[j]):
+                            break
+                        m = re.match(r'(\s*version\s*=\s*")([^"]*)(")', lines[j])
+                        if m:
+                            return path, emit(j, m)
+                    sys.exit("✖ %s: [[package]] %s has no version line" % (path, crate))
+        sys.exit("✖ %s: no [[package]] block named %s" % (path, crate))
+    sys.exit("✖ %s: unknown kind %r (json|toml-package|cargo-lock)" % (s["path"], kind))
+
+for s in surfaces:
+    path, cur = resolve(s)
+    if mode == "read":
+        print("%s\t%s" % (s["path"], cur))
+    else:
+        print("  %s -> %s" % (s["path"], newv))
+PY
+}
+
 bump_versions() {  # bump_versions <version> — rewrite EXACTLY the surfaces rtc-ship.json declares
   # Split from the check on 2026-10-31 (waypoint rtc-ship-sh-split-the-version): --versions-only
   # verifies and writes nothing; this action writes. Hand-bumping N surfaces is the drift the gate
@@ -553,6 +672,13 @@ PY
   if [ -n "$roadmap" ] && [ -e "$top/$roadmap" ]; then
     roadmap_target "$top/$roadmap" write "$v" || return 1
   fi
+  # extra_version_surfaces through the ONE shared resolver as well — bump and gate must read and
+  # write the same targets (waypoint rtc-ship-extra-version-surfaces).
+  local extras
+  extras=$(cfg_get_raw "extra_version_surfaces" "")
+  if [ -n "$extras" ] && [ "$extras" != '""' ]; then
+    extra_surface "$top" "$extras" write "$v" || return 1
+  fi
 }
 
 version_gate() {
@@ -609,6 +735,22 @@ version_gate() {
     echo "✖ $roadmap is declared but holds no version" >&2; bad=1
   elif [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && [ "$rv" != "$mv" ]; then
     echo "✖ $roadmap says $rv, manifest says $mv" >&2; bad=1
+  fi
+  # extra_version_surfaces read through the SAME resolver the bump writes with; a declared
+  # surface that is absent or yields no version fails like every other surface.
+  local extras ex_out ep ev
+  extras=$(cfg_get_raw "extra_version_surfaces" "")
+  if [ -n "$extras" ] && [ "$extras" != '""' ]; then
+    if ex_out=$(extra_surface "$top" "$extras" read); then
+      while IFS=$'\t' read -r ep ev; do
+        [ -n "$ep" ] || continue
+        echo "  $ep : ${ev:-<none>}"
+        if [ -z "$ev" ]; then echo "✖ $ep is declared but holds no version" >&2; bad=1
+        elif [ "$ev" != "$mv" ]; then echo "✖ $ep says $ev, manifest says $mv" >&2; bad=1; fi
+      done <<<"$ex_out"
+    else
+      echo "✖ extra_version_surfaces could not be read (declared surfaces must exist)" >&2; bad=1
+    fi
   fi
   return "$bad"
 }
@@ -1014,6 +1156,12 @@ cd "$WT"; WT=$(pwd)
 # -z, not -n: `[ -n "$out" ] || { dirty }` declares a CLEAN tree dirty and refuses every valid ship.
 [ -z "$(git status --porcelain)" ] || { echo "✖ $WT is dirty" >&2; exit 1; }
 BR=$(git branch --show-current)
+# 1.4.2: a worktree left on a DETACHED HEAD (what a finished `git rebase` leaves behind when the
+# branch was not checked out) made BR empty, and the merge then died mid-loop with git's
+# locale-dependent "nothing to merge" — no diagnosis, and a piped caller read the pipeline's rc.
+# The ship merges a BRANCH, so refuse at the door with the remedy.
+[ -n "$BR" ] || { echo "✖ $WT is on a detached HEAD — the ship merges a branch, so create one first:" >&2
+                  echo "     git -C $WT switch -c <branch-name>" >&2; exit 1; }
 TOP=$(git rev-parse --show-toplevel)
 MAIN=${RTC_MAIN:-$(git rev-parse --git-common-dir | sed 's#/.git$##')}
 PREFIX=$(cfg_get "tag_prefix" "")

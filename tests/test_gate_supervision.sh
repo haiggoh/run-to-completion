@@ -45,8 +45,13 @@ RIG_STDIN="$TMP/stdin/fifo" stall_gate "$TMP/stdin" RTC_STALL_SECONDS=3 RTC_STAL
 e=$(date +%s)
 exec 3>&-
 is "the gate passed" "0" "$RIG_RC"
-if [ $((e - s)) -lt 10 ]; then ok "it did not block on the held-open stdin ($((e - s)) s)"
-else bad "it did not block on the held-open stdin" "< 10 s" "$((e - s)) s"; fi
+# 1.4.2 (waypoint rtc-tests-test-gate): the bound times the WHOLE stall_gate run (version gate +
+# git ops + polling), so <10 s flaked on a loaded shared box (load avg 4.5-6.4, 2026-11-12). A real
+# stdin hang is already caught structurally — the stall detector fires (rc 124, asserted above)
+# and the EOF evidence is the got=[] line below — so this bound only needs to catch "ran away",
+# not "took long": 30 s.
+if [ $((e - s)) -lt 30 ]; then ok "it did not block on the held-open stdin ($((e - s)) s)"
+else bad "it did not block on the held-open stdin" "< 30 s" "$((e - s)) s"; fi
 is "stdin was EOF (read got nothing)" "got=[]" "$(cat "$TMP/stdin/log/got" 2>/dev/null)"
 
 echo "== a stalled pre-flight gate is named =="
@@ -82,8 +87,8 @@ RIG_STDIN="$TMP/pys/fifo" stall_gate "$TMP/pys" RTC_STALL_SECONDS=3 RTC_STALL_PO
 e=$(date +%s)
 exec 3>&-
 is "the gate passed" "0" "$RIG_RC"
-if [ $((e - s)) -lt 10 ]; then ok "pytest did not block on the held-open stdin ($((e - s)) s)"
-else bad "pytest did not block on the held-open stdin" "< 10 s" "$((e - s)) s"; fi
+if [ $((e - s)) -lt 30 ]; then ok "pytest did not block on the held-open stdin ($((e - s)) s)"
+else bad "pytest did not block on the held-open stdin" "< 30 s" "$((e - s)) s"; fi
 is "pytest's stdin was EOF (read got nothing)" "got=[]" "$(cat "$TMP/pys/log/got-py" 2>/dev/null)"
 
 echo "== pre-flight also gets EOF on stdin =="

@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.4.2] — unreleased
+
+### Fixed
+- A worktree left on a DETACHED HEAD (what a finished `git rebase` leaves behind when the branch
+  was not checked out) made `BR` empty, and the ship then died mid-loop at
+  `git merge --ff-only ""` with git's locale-dependent "nothing to merge" — no diagnosis, and a
+  piped caller read the pipeline's rc, not the ship's (observed 2026-11-13 on the free-agents
+  0.57.0 bundle ship). The ship now refuses at the door: "✖ <wt> is on a detached HEAD — the ship
+  merges a branch, so create one first: git -C <wt> switch -c <branch-name>", exit 1. Pinned by
+  four cases in `tests/test_rtc_ship.sh` (refused rc=1, message, remedy, and a planted positive:
+  a branch worktree is NOT hit by the guard).
+- `tests/test_gate_supervision.sh` stdin-timing assertions raised `< 10 s` → `< 30 s`: the bound
+  timed the WHOLE stall_gate run (version gate + git ops + polling), so it flaked on a loaded
+  shared box (load avg 4.5-6.4, 2026-11-12, waypoint rtc-tests-test-gate). A real stdin hang is
+  still caught structurally — the stall detector fires (rc 124) and the `got=[]` EOF evidence is
+  asserted separately — so the timing bound only needs to catch "ran away", not "took long".
+
+### Added
+- `extra_version_surfaces` in rtc-ship.json (waypoint rtc-ship-extra-version-surfaces, owner
+  2026-11-05): additional version surfaces the gate reads AND `--bump-versions` writes through
+  ONE shared resolver (`extra_surface`, mirroring `roadmap_target` — two implementations drift).
+  Kinds: `json` (first `"version"` field, line-preserving splice), `toml-package` (`[package]`
+  table's `version` line), `cargo-lock` (the `[[package]]` block named `crate`, scanning ahead for
+  its version line — name precedes version in the block). Writes are atomic (tmp + os.replace);
+  an absent declared surface, an empty extraction, or an unknown kind is a hard failure, never a
+  silent pass. Pinned by fixture cases in `tests/test_rtc_ship.sh`: consistent tree passes, bump
+  rewrites all four kinds (other crates/keys untouched, newlines preserved), gate passes after,
+  a split in one extra surface fails and names it, a declared-but-absent surface fails.
+
 ## [1.4.1] — unreleased
 
 ### Fixed
