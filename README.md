@@ -223,7 +223,10 @@ goes to `/dev/null` cannot be judged: "ran quietly" and "died having done nothin
 A repo configures the tool with two things, both inside the repo and both committed:
 
 - **`rtc-ship.json`** — data: `tag_prefix` (usually `v`), the `manifest` and `changelog`, which
-  other version surfaces exist (`version_file`, `roadmap`), asset globs, the plugin to refresh and its marketplace (`refresh_plugin`, `refresh_marketplace`),
+  other version surfaces exist (`version_file`, `roadmap`, and `extra_version_surfaces` — a JSON
+  array of `{"path", "kind": "json"|"toml-package"|"cargo-lock", "key"?, "crate"?}` files whose
+  version token the bump writes and the gate reads through ONE shared resolver,
+  `bin/rtc_version_surface.py`), asset globs, the plugin to refresh and its marketplace (`refresh_plugin`, `refresh_marketplace`),
   `default_branch`, `require_default_branch_checkout` (recommended — see below), the test command and worker count (`test_cmd`, `test_workers`), and `reap`
   (set `false` to permanently skip the post-release cleanup — see below).
 - **`.rtc/{pre-flight,pre-package,post-release}.sh`** — commands only that repo has. **Opt-in by

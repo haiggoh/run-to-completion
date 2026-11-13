@@ -20,14 +20,17 @@ and proves the result with the repo's own gate.
    outputs. A red gate here means: fix the surfaces BEFORE changing the config.
 3. **Which key?** AskUserQuestion, header "Key", options from the known set with current
    values in the labels: `tag_prefix`, `manifest`, `changelog`, `version_file`,
-   `roadmap`, `assets`, `refresh_plugin`, `test_workers`, `default_branch`,
-   `require_default_branch_checkout`, `reap`. Keys starting with `_` are comments —
-   never edit them. Free-text Other for a new key.
+   `roadmap`, `extra_version_surfaces`, `assets`, `refresh_plugin`, `test_workers`,
+   `default_branch`, `require_default_branch_checkout`, `reap`. Keys starting with `_`
+   are comments — never edit them. Free-text Other for a new key.
 4. **New value + validation.** AskUserQuestion, header "Value". Validate before writing:
    booleans only `true`/`false`; `test_workers` a positive integer; paths repo-relative
    with no leading `/` and no `..`; `manifest` must name a `.json` file; an empty value
    means "unset" (the surface is then not declared — allowed for `version_file`,
-   `roadmap`, `assets`, `refresh_plugin`). An invalid value aborts with the reason —
+   `roadmap`, `assets`, `refresh_plugin`). `extra_version_surfaces` is a JSON array
+   of `{"path", "kind": "json"|"toml-package"|"cargo-lock", "key"?, "crate"?}` —
+   validate by parsing, and reject an entry whose declared file is absent (the
+   empty-extraction rule). An invalid value aborts with the reason —
    never fall through to the old value.
 5. **Write atomically.** Edit the JSON with python (load, set, dump with the file's
    existing indent, tmp + os.replace) — never a regex rewrite of the raw text, and never
