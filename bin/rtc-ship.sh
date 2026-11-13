@@ -1355,6 +1355,7 @@ published_version() {  # the version the PUBLISHED manifest declares, or "" if i
   return 0
 }
 
+vis_seen=0
 if [ "${RTC_TAG_VISIBILITY:-1}" = 1 ] && [ -z "$(github_slug)" ]; then
   # Not a GitHub remote (another host, a local path): installers do not resolve it through
   # raw.githubusercontent.com, so this check cannot see what they see. Skip it OUT LOUD.
@@ -1363,7 +1364,7 @@ elif [ "${RTC_TAG_VISIBILITY:-1}" = 1 ]; then
   vis_tries=0
   while :; do
     got=$(published_version)
-    if [ "$got" = "$V" ]; then phase "🚢 tag ${PREFIX}${V} is VISIBLE to installers"; break; fi
+    if [ "$got" = "$V" ]; then phase "🚢 tag ${PREFIX}${V} is VISIBLE to installers"; vis_seen=1; break; fi
     vis_tries=$((vis_tries + 1))
     if [ "$vis_tries" -ge "${RTC_TAG_VISIBILITY_TRIES:-6}" ]; then
       echo "✖ the published manifest declares ${got:-<nothing>}, not $V — installers still resolve the old version" >&2
@@ -1487,33 +1488,64 @@ installed_version() {  # installed_version <plugin> — the version the INSTALLE
 
 PLUGIN=$(cfg_get "refresh_plugin" "")
 MARKETPLACE=$(cfg_get "refresh_marketplace" "haiggoh")
-# refresh_installed — get-haiggoh when it is installed, otherwise Claude Code's own plugin CLI,
-# silently: which tool refreshes is not the user's concern, whether the copy MOVED is, and the
-# read-back below decides that either way. Only having neither tool is an error.
-refresh_installed() {
+# The refresh — get-haiggoh when it is installed, otherwise Claude Code's own plugin CLI, silently:
+# which tool refreshes is not the user's concern, whether the copy MOVED is, and the read-back
+# decides that either way. Only having neither tool is an error.
+# When get-haiggoh is present but does NOT land (it exits 0 having copied nothing when the manifest
+# it reads is stale — a raw.githubusercontent.com window, or a TLS-inspecting network where its
+# Python fetch fails SSL and it reports "current" anyway; observation 0060, three misses in one
+# day), the loop falls back to the native CLI and reads back AGAIN. Only when BOTH leave the old
+# version in place does the ship fail — and then the message must not blame the CDN if the
+# tag-visibility probe already saw the new version ($vis_seen): what installers see is fine, the
+# local refresh is what failed. The CDN advice stays correct when the probe never ran
+# (RTC_TAG_VISIBILITY=0, or a non-GitHub origin where it cannot run).
+native_refresh() {
+  claude plugin marketplace update "$MARKETPLACE" 2>&1 | sed 's/^/  /'
+  claude plugin update "$PLUGIN@$MARKETPLACE" 2>&1 | sed 's/^/  /'
+}
+if [ -n "$PLUGIN" ] && [ "${RTC_SKIP_REFRESH:-0}" != 1 ]; then
+  refresh_ran=""
   if command -v get-haiggoh >/dev/null 2>&1; then
     get-haiggoh apply --only "$PLUGIN" 2>&1 | sed 's/^/  /'
+    refresh_ran="get-haiggoh"
+    gh_got=$(installed_version "$PLUGIN")
+    got=$gh_got
+    if [ "$gh_got" != "$V" ] && command -v claude >/dev/null 2>&1; then
+      native_refresh
+      refresh_ran="both"
+      got=$(installed_version "$PLUGIN")
+    fi
+    if [ "$got" = "$V" ]; then
+      if [ "$refresh_ran" = both ]; then
+        phase "refreshed by claude plugin update (get-haiggoh left ${gh_got:-<none>})"
+      else
+        phase "refreshed by get-haiggoh"
+      fi
+    fi
   elif command -v claude >/dev/null 2>&1; then
-    claude plugin marketplace update "$MARKETPLACE" 2>&1 | sed 's/^/  /'
-    claude plugin update "$PLUGIN@$MARKETPLACE" 2>&1 | sed 's/^/  /'
+    native_refresh
+    refresh_ran="claude"
+    got=$(installed_version "$PLUGIN")
   else
     echo "✖ cannot refresh the installed $PLUGIN: neither get-haiggoh nor claude is on PATH" >&2
     echo "  the release is published but NOT confirmed live; set RTC_SKIP_REFRESH=1 to ship without a refresh" >&2
     exit 1
   fi
-}
-if [ -n "$PLUGIN" ] && [ "${RTC_SKIP_REFRESH:-0}" != 1 ]; then
-  refresh_installed
-  # VERIFY it moved — invoking is not the same as landing. `get-haiggoh` exits 0 having copied
-  # NOTHING when the manifest it reads is still the old version (a raw.githubusercontent.com
-  # propagation window, a stale marketplace cache, an unbumped manifest), so a green exit code
-  # says nothing about whether the installed copy is now $V. Measured 2026-10-25 on 0.6.7: this
-  # loop printed "done — v0.6.7 is live" and exited 0 while the installed copy was still 0.6.6,
-  # and only a manual retry landed it. fa-ship.sh checked this; the generalization dropped it.
-  got=$(installed_version "$PLUGIN")
-  if [ "$got" != "$V" ]; then
+  # VERIFY it moved — invoking is not the same as landing (the reason the fallback above exists).
+  # Measured 2026-10-25 on 0.6.7: the loop printed "done — v0.6.7 is live" and exited 0 while the
+  # installed copy was still 0.6.6, and only a manual retry landed it. fa-ship.sh checked this;
+  # the generalization dropped it.
+  if [ "${got:-}" != "$V" ]; then
     echo "✖ the installed $PLUGIN is at ${got:-<none>}, not $V — the refresh did not land" >&2
-    echo "  re-run the refresh once after a short delay (the manifest is served by a CDN)" >&2
+    if [ "$vis_seen" = 1 ]; then
+      if [ "$refresh_ran" = both ]; then
+        echo "  both refreshers ran; installed is ${got:-<none>}. Re-check: claude plugin update $PLUGIN@$MARKETPLACE" >&2
+      else
+        echo "  the tag-visibility probe already saw $V — re-run the refresh: claude plugin update $PLUGIN@$MARKETPLACE (or get-haiggoh apply --only $PLUGIN)" >&2
+      fi
+    else
+      echo "  re-run the refresh once after a short delay (the manifest is served by a CDN)" >&2
+    fi
     exit 1
   fi
   phase "installed $PLUGIN is $V"

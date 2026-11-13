@@ -23,11 +23,19 @@ landing_stub() {
     'exit 0' > "$1/bin/$2"
   chmod +x "$1/bin/$2"
 }
+claude_stub() {  # claude_stub <dir> — record every claude invocation, succeed, copy NOTHING.
+                 # Defined here (not in the no-get-haiggoh section below): r6 needs it before that.
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "claude %s\n" "$*" >> "$CALLS"' 'exit 0' > "$1/bin/claude"
+  chmod +x "$1/bin/claude"
+}
 D="$TMP/r5"; rehearse "$D"; fake_cache "$D" 0.1.0; landing_stub "$D" get-haiggoh
 is "a refresh that moved the version ships" "0" "$(ship "$D" 0.2.0 'second')"
 has "and reports the installed version" "$(cat "$D/out")" "installed"
 
-D="$TMP/r6"; rehearse "$D"; fake_cache "$D" 0.1.0
+# claude_stub is REQUIRED here, not decoration: r6 ships on the FULL PATH (ship(), not ship_bare),
+# and since the native fallback (rtc 1.5.0) a no-op get-haiggoh + stale cache would otherwise reach
+# the REAL claude on PATH and mutate the user's installed plugins (§9 of the 1.5.0 plan).
+D="$TMP/r6"; rehearse "$D"; fake_cache "$D" 0.1.0; claude_stub "$D"
 rc=$(ship "$D" 0.2.0 'second')
 is "a refresh that did NOT move the version FAILS the ship" "1" "$rc"
 has "and names both the installed and the shipped version" "$(cat "$D/out")" "is at 0.1.0, not 0.2.0"
@@ -68,10 +76,6 @@ is "an INVISIBLE tag fails the ship" "1" "$rc"
 # read-back still decides. PATH is RESTRICTED to the stubs + /usr/bin:/bin so neither the real
 # get-haiggoh (~/.local/bin) nor the real claude (/opt/homebrew/bin) can ever run from a test.
 # ---------------------------------------------------------------------------------------------
-claude_stub() {  # claude_stub <dir> — record every claude invocation, succeed
-  printf '%s\n' '#!/usr/bin/env bash' 'printf "claude %s\n" "$*" >> "$CALLS"' 'exit 0' > "$1/bin/claude"
-  chmod +x "$1/bin/claude"
-}
 ship_bare() {  # ship_bare <dir> <version> — the loop with ONLY the stubs and the system bin dirs
   local d=$1
   ( cd "$d/wt" && CALLS="$d/calls" PATH="$d/bin:/usr/bin:/bin" RTC_SKIP_TESTS=1 \
@@ -120,5 +124,38 @@ rc=$(cd "$D/wt" && HOME="$D/home" PYT_COUNT="$D/pyt.count" PF_COUNT="$D/pf.count
        bash "$ROOT/bin/rtc-ship.sh" "$D/wt" 0.2.0 'second' >"$D/out" 2>&1; echo $?)
 is "with no ~/.local/bin/pytest, a GATED ship uses the pytest on PATH" "0" "$rc"
 is "  and it really ran" "1" "$(wc -l < "$D/pyt.count" 2>/dev/null | tr -d ' ' || echo 0)"
+
+# ---------------------------------------------------------------------------------------------
+# The native-CLI fallback (rtc 1.5.0, observation 0060): get-haiggoh exits 0 having copied NOTHING
+# when the manifest it reads is stale (a CDN window, a TLS-inspecting network — its Python fetch
+# fails SSL and reports "current"), so when the read-back shows it left the old version, the loop
+# must fall back to `claude plugin update` and read back AGAIN before failing. Only when BOTH
+# refreshers leave it behind does the ship fail — and then it must not blame the CDN when the
+# tag-visibility probe already saw the new version (the manifest the installers see is fine; the
+# local refresh is what failed).
+# ---------------------------------------------------------------------------------------------
+D="$TMP/r16"; rehearse "$D"; fake_cache "$D" 0.1.0; landing_stub "$D" claude
+is "get-haiggoh misses: the ship still ships via the claude fallback" "0" "$(ship_bare "$D" 0.2.0)"
+has "  saying the native CLI did it" "$(cat "$D/out")" "refreshed by claude plugin update (get-haiggoh left 0.1.0)"
+is "  and claude really ran both its steps" "1" "$(grep -cx 'claude plugin update rehearsal@haiggoh' "$D/calls")"
+
+D="$TMP/r17"; rehearse "$D"; fake_cache "$D" 0.1.0; claude_stub "$D"
+rc=$(ship_bare "$D" 0.2.0)
+is "both refreshers leave it behind: the ship FAILS" "1" "$rc"
+has "  saying both ran" "$(cat "$D/out")" "both refreshers ran"
+is "  and does NOT blame the CDN (the probe saw the new version)" "0" "$(grep -ci 'CDN' "$D/out")"
+
+D="$TMP/r18"; rehearse "$D"; landing_stub "$D" get-haiggoh; claude_stub "$D"; fake_cache "$D" 0.1.0
+is "get-haiggoh lands: ships" "0" "$(ship_bare "$D" 0.2.0)"
+has "  crediting get-haiggoh" "$(cat "$D/out")" "refreshed by get-haiggoh"
+is "  and claude is never called" "0" "$(grep -c '^claude ' "$D/calls")"
+
+D="$TMP/r19"; rehearse "$D"; fake_cache "$D" 0.1.0; claude_stub "$D"
+rc=$(cd "$D/wt" && CALLS="$D/calls" PATH="$D/bin:/usr/bin:/bin" RTC_SKIP_TESTS=1 \
+      RTC_PLUGIN_CACHE="$D/cache" RTC_TAG_VISIBILITY_DELAY=0 PUBLISHED_VERSION=0.2.0 \
+      RTC_TAG_VISIBILITY=0 RTC_SHIP_LOG_DIR="$D/logs" \
+      bash "$ROOT/bin/rtc-ship.sh" "$D/wt" 0.2.0 'second' >"$D/out" 2>&1; echo $?)
+is "visibility SKIPPED + both refusers: still fails" "1" "$rc"
+has "  and MAY blame the CDN (no probe ever saw the new version)" "$(cat "$D/out")" "CDN"
 
 summary
