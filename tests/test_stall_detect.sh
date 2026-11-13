@@ -28,8 +28,12 @@ mkrepo "$TMP/si" '{"tag_prefix":"v","test_cmd":"for i in $(seq 1 40); do echo li
 s=$(date +%s)
 stall_gate "$TMP/si" RTC_STALL_SECONDS=3 RTC_STALL_POLL=1 RTC_STALL_KILL_GRACE=1
 e=$(date +%s)
-if [ $((e - s)) -lt 25 ]; then ok "the stall ended inside the 30 s guard ($((e - s)) s)"
-else bad "the stall ended inside the 30 s guard" "< 25 s" "$((e - s)) s"; fi
+# 1.4.2 (same flake family as waypoint rtc-tests-test-gate): the bound measured the WHOLE rig run
+# under load and flaked (29 s measured, 2026-11-13 gate run). "The DETECTOR ended it, not the
+# 30 s guard" is proven structurally by the .stall diagnosis file existing below (the guard fires
+# no diagnosis), so the clock bound only needs to catch "never ended": keep it under the guard.
+if [ $((e - s)) -lt 30 ]; then ok "the stall ended inside the 30 s guard ($((e - s)) s)"
+else bad "the stall ended inside the 30 s guard" "< 30 s" "$((e - s)) s"; fi
 is "the gate's rc is the stall code 124" "124" "$RIG_RC"
 has "rtc-ship's output says STALLED" "$(cat "$TMP/si/log/out")" "STALLED"
 has "the phase line names the stalled gate" "$(cat "$TMP/si/log/out")" "tests (config) STALLED — diagnosis in"
