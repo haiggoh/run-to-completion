@@ -6,11 +6,15 @@
 # function computes the exit status. Harness helpers (ok/bad/is/has + mkrepo) follow
 # tests/test_gates.sh; `lacks` is added for the no-argv-leak assertions.
 #
-# Every gate run is wrapped in a 30 s guard THE TEST OWNS: without the watchdog (the red run)
-# a stalled gate would otherwise hang the suite forever. set -m gives each background job its
-# own process group (verified on this machine's bash 3.2.57), so the guard can TERM/KILL the
-# gate's whole tree even after rtc-ship itself is dead, and the EXIT trap reaps any group a
-# case left behind.
+# Every gate run is wrapped in a guard THE TEST OWNS (default 90 s, override
+# STALL_RIG_GUARD_SECONDS): without the watchdog (the red run) a stalled gate would otherwise
+# hang the suite forever. 1.4.2: the guard was a fixed 30 s, and under the gate's own 12-way
+# parallel load a stall case's rc came back 143 (the GUARD's TERM fired before the detector's
+# 124 — measured in the 1.4.2 ship gate 2026-11-13); the detector still fires at ~5-10 s of
+# no-progress, so the guard only needs to catch "never ends", not "took long". set -m gives each
+# background job its own process group (verified on this machine's bash 3.2.57), so the guard can
+# TERM/KILL the gate's whole tree even after rtc-ship itself is dead, and the EXIT trap reaps
+# any group a case left behind.
 #
 # Stall cases run with RTC_STALL_SECONDS=3 RTC_STALL_POLL=1 and the tests-only
 # RTC_STALL_KILL_GRACE=1 (default 5), so a stall case ends in ~5-10 s — far under the suite's
@@ -65,14 +69,15 @@ mkrepo() {  # mkrepo <dir> [rtc-ship.json-body]
 }
 
 RIG_GPID=""; RIG_GUARD=""; RIG_RC=""
-stall_gate() {  # stall_gate <dir> [env=val...] — run --test-only under the 30 s owned guard; sets RIG_RC
+stall_gate() {  # stall_gate <dir> [env=val...] — run --test-only under the owned guard; sets RIG_RC
   local d=$1; shift
+  local guard_s=${STALL_RIG_GUARD_SECONDS:-90}
   mkdir -p "$d/log"
   ( cd "$d" && exec env HOME="$d/home" GATES_LOG="$d/log" "$@" \
       bash "$ROOT/bin/rtc-ship.sh" --test-only "$d" >"$d/log/out" 2>&1 <"${RIG_STDIN:-/dev/null}" ) &
   RIG_GPID=$!
   STALL_RIG_GROUPS="$STALL_RIG_GROUPS $RIG_GPID"
-  ( sleep 30; kill -TERM -- "-$RIG_GPID" 2>/dev/null; sleep 2; kill -KILL -- "-$RIG_GPID" 2>/dev/null ) &
+  ( sleep "$guard_s"; kill -TERM -- "-$RIG_GPID" 2>/dev/null; sleep 2; kill -KILL -- "-$RIG_GPID" 2>/dev/null ) &
   RIG_GUARD=$!
   wait "$RIG_GPID"; RIG_RC=$?
   kill -TERM -- "-$RIG_GUARD" 2>/dev/null
