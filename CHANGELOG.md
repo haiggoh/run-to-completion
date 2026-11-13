@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.5.0] — 2026-11-13
+
+### Added — the three hardening items from the do-now triage
+
+- **Ship door (exit 2):** the 3-arg ship path refuses the canonical checkout — and any directory
+  that is not a linked worktree (`--git-dir` vs `--git-common-dir` identity check, so symlinks and
+  trailing slashes are refused the same way; a target that cannot be `cd`'d into is refused too).
+  Shipping a canonical checkout used to fail its git steps mid-loop (or exit 0 having shipped
+  nothing — the summon-skills incident, caught only by ls-remote). Read-only modes
+  (`--test-only`, `--versions-only`, `--bump-versions`) stay allowed on the canonical checkout.
+  16 door cases; the identity check is mutation-tested red; u10 inverted to the refusal.
+- **Native refresh fallback:** when get-haiggoh is present but leaves the installed version behind
+  (it exits 0 having copied nothing when the manifest it reads is stale — obs 0060, three misses
+  in one day), the loop falls back to `claude plugin marketplace update` + `claude plugin update`
+  and reads back again, crediting whichever refresher moved the copy. Only when BOTH leave it
+  behind does the ship fail — without advising a CDN delay when the tag-visibility probe already
+  saw the new version. 4 new cases; the fallback call is mutation-tested red.
+- **Extra version surfaces hardened** (1.4.2 introduced `extra_version_surfaces` with an inline
+  resolver; 1.5.0 moves it into `bin/rtc_version_surface.py` — a standalone CLI both sides call,
+  so the two cannot drift — and strengthens it): an explicit json `key` targets that dotted path
+  depth-aware (a nested decoy with the same key is never touched), a duplicated crate across
+  `[[package]]` blocks is REFUSED instead of silently picking one, writes validate every surface
+  before writing any (a broken third surface cannot leave a half-bump) and re-extract as a
+  post-write check. Both contracts pinned: 24 cases in `tests/test_extra_surfaces.sh` (decoys for
+  nested-json, dependencies-inline, decoy-block) plus 1.4.2's fixture cases in
+  `tests/test_rtc_ship.sh` through the same resolver. `--which-config` lists the extras.
+
 ## [1.4.2] — unreleased
 
 ### Fixed
@@ -28,6 +55,7 @@
   silent pass. Pinned by fixture cases in `tests/test_rtc_ship.sh`: consistent tree passes, bump
   rewrites all four kinds (other crates/keys untouched, newlines preserved), gate passes after,
   a split in one extra surface fails and names it, a declared-but-absent surface fails.
+
 
 ## [1.4.1] — unreleased
 

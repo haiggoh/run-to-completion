@@ -267,15 +267,21 @@ is "and says the tests failed" "1" "$(grep -c 'tests failed' "$TMP/red-out")"
 # 1.4.2: a worktree on a DETACHED HEAD (what a finished rebase leaves behind) must be refused at
 # the door with the remedy — before it dies at `git merge --ff-only ""` with git's "nothing to
 # merge". Planted positive: the same repo ON A BRANCH must not print that message.
+# 1.5.0 layering: the DOOR (canonical/non-work-tree, exit 2) fires before the detached-HEAD
+# check, so the detached scenario must be pinned on a LINKED worktree — the shape it actually
+# guards (a worktree left detached by a finished rebase). A detached PRIMARY checkout is the
+# door's verdict now (pinned in tests/test_ship_door.sh).
 DET="$TMP/det"; mkrepo "$TMP/det0" main
-cp -r "$TMP/det0" "$DET"; git -C "$DET" checkout -q --detach HEAD
-"$ROOT/bin/rtc-ship.sh" "$DET" 1.0.0 "title" >"$TMP/det-out" 2>&1
+cp -r "$TMP/det0" "$DET"; git -C "$DET" worktree add -q "$DET-wt" -b feat/ship
+git -C "$DET-wt" checkout -q --detach HEAD
+"$ROOT/bin/rtc-ship.sh" "$DET-wt" 1.0.0 "title" >"$TMP/det-out" 2>&1
 is "a detached-HEAD worktree is refused" "$?" "1"
 is "and the refusal names the detached HEAD" "1" "$(grep -c 'detached HEAD' "$TMP/det-out")"
 is "and prints the remedy (switch -c)" "1" "$(grep -c 'switch -c' "$TMP/det-out")"
 BR2="$TMP/br"; mkrepo "$TMP/br0" main; cp -r "$TMP/br0" "$BR2"
-"$ROOT/bin/rtc-ship.sh" "$BR2" 1.0.0 "title" >"$TMP/br-out" 2>&1
-git -C "$BR2" branch --show-current >/dev/null  # still on the branch
+git -C "$BR2" worktree add -q "$BR2-wt" -b feat/ship
+"$ROOT/bin/rtc-ship.sh" "$BR2-wt" 1.0.0 "title" >"$TMP/br-out" 2>&1
+git -C "$BR2-wt" branch --show-current >/dev/null  # still on the branch
 is "a branch worktree is NOT hit by the detached guard" "0" "$(grep -c 'detached HEAD' "$TMP/br-out")"
 
 # 1.4.2 (waypoint rtc-ship-extra-version-surfaces): extra_version_surfaces are read by the gate
