@@ -14,7 +14,8 @@
 # So the gates live here, in one place, and a repo cannot skip them by forgetting to run them.
 #
 # Usage:
-#   rtc-ship.sh <worktree-dir> <version> "<release title summary>"
+#   rtc-ship.sh <worktree-dir> <version> "<release title summary>"   <worktree-dir> must be a LINKED
+#               worktree: the canonical checkout (or any non-work-tree directory) is refused, exit 2
 #   rtc-ship.sh <worktree-dir> <version> "<title>" --no-reap   keep worktree and branches, this ship only
 #   rtc-ship.sh --test-only <worktree-dir>    run the gates and stamp the tree, ship nothing
 #   rtc-ship.sh --versions-only <worktree-dir>  the version gate alone (fast, pre-commit)
@@ -26,7 +27,8 @@
 # Exit codes (the same vocabulary on every surface — the ship loop, --test-only, --versions-only):
 #   0     success
 #   1     a gate, the version check, or a later ship step failed
-#   2     usage or config error (unknown flag, bad version argument, invalid rtc-ship.json value)
+#   2     usage or config error (unknown flag, bad version argument, invalid rtc-ship.json value),
+#         or the door refused the target: the canonical checkout / not inside a git work tree
 #   124   a gate STALLED — no output and no CPU for the stall window (the timeout(1) convention).
 #         It dominates a mixed run (a stall beats an ordinary failure). Callers may branch on 124
 #         (e.g. re-run with RTC_BASELINE=1 for a branch-only vs pre-existing label); any non-zero
@@ -1152,7 +1154,26 @@ fi
 [ $# -eq 3 ] || { usage >&2; exit 2; }
 
 WT=$1 V=$2 TITLE=$3
-cd "$WT"; WT=$(pwd)
+# --- the door: the ship target must be a LINKED worktree ---------------------------------------
+# Shipping a canonical checkout fails its git steps and dies mid-loop (or, in the shape this
+# guards against originally, exited 0 having shipped nothing — summon-skills, 2026-11-11, caught
+# only by ls-remote): the rebase has already run in the target by the time the first git step
+# fails. The check is repo IDENTITY, not path spelling — --git-dir equals --git-common-dir exactly
+# when this checkout IS the repo's primary checkout — so a symlink or a trailing slash to the
+# canonical checkout is refused the same way. The read-only modes (--test-only, --versions-only,
+# --bump-versions) return above and never reach this.
+door_refuse() { echo "✖ $WT is not inside a git work tree" >&2; exit 2; }
+cd "$WT" 2>/dev/null || door_refuse
+WT=$(pwd)
+[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ] || door_refuse
+gd=$(git rev-parse --absolute-git-dir 2>/dev/null) || door_refuse
+cgd=$(git rev-parse --git-common-dir 2>/dev/null) || door_refuse
+cgd=$(cd "$cgd" 2>/dev/null && pwd -P) || door_refuse
+if [ "$gd" = "$cgd" ]; then
+  echo "✖ $WT is the canonical checkout — run the ship from a linked worktree:" \
+       "git worktree add -b <branch> <dir> origin/<default>" >&2
+  exit 2
+fi
 # -z, not -n: `[ -n "$out" ] || { dirty }` declares a CLEAN tree dirty and refuses every valid ship.
 [ -z "$(git status --porcelain)" ] || { echo "✖ $WT is dirty" >&2; exit 1; }
 BR=$(git branch --show-current)

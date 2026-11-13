@@ -44,14 +44,17 @@ mkshiprepo() {  # mkshiprepo <dir> <rtc-ship.json-body> [pre-flight-body]
   if [ -n "$pf" ]; then mkdir -p "$d/.rtc"; printf '%s\n' "$pf" > "$d/.rtc/pre-flight.sh"; chmod +x "$d/.rtc/pre-flight.sh"; fi
   ( cd "$d" && git init -q -b main && git add -A && git -c user.email=t@t -c user.name=t commit -qm init \
       && git init -q --bare "$d-origin.git" && git remote add origin "$d-origin.git" \
-      && git push -q origin main )
+      && git push -q origin main \
+      && git worktree add -q "$d-wt" -b feat/ship )
 }
 
-ship_full() {  # ship_full <dir> [env=val...] — FULL ship path under a 120 s owned guard; sets RIG_RC
+ship_full() {  # ship_full <dir> [env=val...] — FULL ship path under a 120 s owned guard; sets RIG_RC.
+               # Ships the rig's LINKED worktree ($d-wt): the door refuses a canonical checkout
+               # (rtc 1.5.0), and the rig's primary is one by construction.
   local d=$1; shift
   mkdir -p "$d/log" "$d/shiplogs" "$d/home"
-  ( cd "$d" && exec env HOME="$d/home" GATES_LOG="$d/log" RTC_SHIP_LOG_DIR="$d/shiplogs" "$@" \
-      bash "$ROOT/bin/rtc-ship.sh" "$d" 9.9.9 "probe" >"$d/log/out" 2>&1 </dev/null ) &
+  ( cd "$d-wt" && exec env HOME="$d/home" GATES_LOG="$d/log" RTC_SHIP_LOG_DIR="$d/shiplogs" "$@" \
+      bash "$ROOT/bin/rtc-ship.sh" "$d-wt" 9.9.9 "probe" >"$d/log/out" 2>&1 </dev/null ) &
   RIG_GPID=$!
   STALL_RIG_GROUPS="$STALL_RIG_GROUPS $RIG_GPID"
   # 60 s, not 30: under heavy machine load the door checks (fetch/rebase/ps) alone can eat most of

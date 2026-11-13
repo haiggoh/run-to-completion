@@ -5,18 +5,20 @@
 # Usage: bash tests/test_ship_cleanup_optouts.sh
 source "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/rehearsal.sh"
 
-# Shipping the canonical checkout itself must reap nothing: that tree is what every other worktree
-# is measured against, so deleting it would take the repo's only clean copy with it. RTC_MAIN is
-# pinned because the derivation `git rev-parse --git-common-dir | sed 's#/.git$##'` returns a
-# RELATIVE path when $WT is the primary checkout (pre-existing, unrelated to cleanup), which would
-# fail the ship before the guard is ever reached.
-D="$TMP/u10"; rehearse "$D"; fake_cache "$D" 0.1.0
+# Shipping the canonical checkout itself is refused at the door (exit 2, rtc 1.5.0): that tree is
+# what every other worktree is measured against, and a ship that ran there could only fail its git
+# steps AFTER the rebase had already run in it — the pre-door behaviour this case used to pin.
+# The refusal is asserted here too so the cleanup rig's shape (RTC_SKIP_TESTS=1, stubs on PATH,
+# canonical checkout as the target) can never silently regress the door.
+D="$TMP/u10"; rehearse "$D"
+before_main=$(git -C "$D/origin.git" rev-parse refs/heads/main)
 rc=$( cd "$D/main" && CALLS="$D/calls" PATH="$D/bin:$PATH" RTC_SKIP_TESTS=1 \
       RTC_SKIP_REFRESH=1 RTC_MAIN="$D/main" RTC_BACKUP_DIR="$TMP/bk" RTC_TAG_VISIBILITY_DELAY=0 \
       PUBLISHED_VERSION=0.1.0 RTC_SHIP_LOG_DIR="$D/logs" bash "$ROOT/bin/rtc-ship.sh" "$D/main" 0.1.0 'canonical' >"$D/out" 2>&1; echo $? )
-is "shipping the canonical checkout ships" "0" "$rc"
-is "  and does NOT remove it" "0" "$([ -d "$D/main" ] && echo 0 || echo 1)"
-is "  and reports why it was not touched" "1" "$(grep -c 'canonical checkout' "$D/out")"
+is "shipping the canonical checkout is refused at the door" "2" "$rc"
+is "  and the checkout is NOT removed" "0" "$([ -d "$D/main" ] && echo 0 || echo 1)"
+is "  and the refusal names the canonical checkout" "1" "$(grep -c 'canonical checkout' "$D/out")"
+is "  and origin is untouched" "$before_main" "$(git -C "$D/origin.git" rev-parse refs/heads/main)"
 
 # What this case actually proves, and what it does NOT. Measured 2026-10-27 by deleting each
 # safeguard from the script in turn: git refuses to delete a branch that is checked out, and refuses
