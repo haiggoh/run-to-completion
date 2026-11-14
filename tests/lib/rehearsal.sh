@@ -18,6 +18,12 @@ has() { case "$2" in *"$3"*) ok "$1" ;; *) bad "$1" "contains: $3" "$2" ;; esac;
 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+# 1.6.0 hermeticity: the user-level defaults template must never come from the real HOME in a
+# test — each rig gets its own scratch plugin-data dir (tests/test_ship_defaults.sh overrides it
+# per case to exercise the template itself). The rig's rtc-ship.json pins
+# require_default_branch_checkout: false explicitly, so the suite keeps testing the pre-1.6.0
+# loop mechanics regardless of what the (scratch) template defaults to.
+export CLAUDE_PLUGIN_DATA="${TMP:-$(mktemp -d)}/plugindata"
 
 # ---------------------------------------------------------------------------------------------
 # The rehearsal: a bare "origin", its clone as the canonical checkout, and a worktree branch to
@@ -42,7 +48,8 @@ rehearse() {  # rehearse <dir> — build the scratch repo; caller then edits and
   "manifest": ".claude-plugin/plugin.json",
   "changelog": "CHANGELOG.md",
   "assets": "",
-  "refresh_plugin": "rehearsal"
+  "refresh_plugin": "rehearsal",
+  "require_default_branch_checkout": false
 }
 JSON
     git add -A && git commit -qm first

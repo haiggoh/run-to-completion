@@ -383,23 +383,112 @@ resolve_top() {  # the repo root, or $PWD where there is NO git repo (see below)
   printf '%s\n' "${t:-$base}"
 }
 
-cfg_get() {  # cfg_get <key> [default] — one scalar out of rtc-ship.json
+cfg_get() {  # cfg_get <key> [default] — one scalar out of rtc-ship.json, layered over the
+             # user-level defaults template (waypoint rtc-ship-user-level-default)
   local key=$1 def=${2-} top toplevel
   top=$(resolve_top)
-  RTC_CFG_FILE="$top/rtc-ship.json" python3 - "$key" "$def" <<'PY'
+  cfg_resolve scalar "$key" "$def"
+}
+
+# --- the user-level defaults template (waypoint rtc-ship-user-level-default) -------------------
+# One defaults.json under the plugin data dir whose POLICY keys every repo INHERITS: a repo's own
+# rtc-ship.json value always wins, and "extends": false opts a repo out entirely. POLICY keys are
+# machine/behaviour preferences; a REPO-specific key (paths, names, branches) inside the template
+# is a loud config error, exit 2 — the template can never impose one repo's paths on another.
+POLICY_KEYS="require_default_branch_checkout reap stall_seconds stall_retries test_workers"
+defaults_file() {  # the template path, PURE resolver — the set-but-missing override check lives
+                   # in the READ path (cfg_resolve), not here: ensure_defaults_template must be
+                   # able to resolve a path whose file does not exist yet (it is about to create it)
+  if [ -n "${RTC_DEFAULTS_FILE:-}" ]; then
+    printf '%s\n' "$RTC_DEFAULTS_FILE"; return 0
+  fi
+  if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
+    printf '%s\n' "$CLAUDE_PLUGIN_DATA/defaults.json"; return 0
+  fi
+  printf '%s\n' "$HOME/.claude/plugins/data/run-to-completion/defaults.json"
+}
+ensure_defaults_template() {  # created on the FIRST ship / ship-config invocation; announced.
+  # Never auto-creates at an RTC_DEFAULTS_FILE override path: the override points at a file the
+  # operator says EXISTS — silently writing it would mask a typo'd path (the read path's
+  # set-but-missing check is what must fire there, not a quiet creation).
+  if [ -n "${RTC_DEFAULTS_FILE:-}" ]; then return 0; fi
+  local f; f=$(defaults_file)
+  if [ ! -f "$f" ]; then
+    mkdir -p "$(dirname "$f")" 2>/dev/null || { echo "✖ cannot create the defaults directory for $f" >&2; exit 2; }
+    printf '{\n  "require_default_branch_checkout": true\n}\n' > "$f" \
+      || { echo "✖ cannot write the defaults template $f" >&2; exit 2; }
+    phase "📜 created the user-level defaults template $f — its POLICY keys every repo inherits (\"extends\": false opts a repo out)"
+  fi
+}
+validate_defaults_template() {  # policy keys only; a repo-specific key is a loud config error
+  local f; f=$(defaults_file)
+  [ -f "$f" ] || return 0
+  DEFAULTS_FILE="$f" POLICY_KEYS="$POLICY_KEYS" python3 - <<'PY' || exit 2
 import json, os, sys
-key, default = sys.argv[1], sys.argv[2]
+path = os.environ["DEFAULTS_FILE"]
+policy = set(os.environ["POLICY_KEYS"].split())
 try:
-    with open(os.environ["RTC_CFG_FILE"]) as f:
-        v = json.load(f).get(key)
-except Exception:
-    v = None
-if v is None:
-    print(default)
-elif isinstance(v, bool):
-    print("1" if v else "0")
+    d = json.load(open(path))
+except Exception as e:
+    sys.exit('✖ the defaults template %s is not valid JSON: %s' % (path, e))
+if not isinstance(d, dict):
+    sys.exit('✖ the defaults template %s must be a JSON object' % path)
+bad = sorted(k for k in d if k != "extends" and k not in policy)
+if bad:
+    sys.exit('✖ the defaults template %s holds repo-specific key(s) %s — the template carries POLICY '
+             'keys only (%s)' % (path, ", ".join(bad), ", ".join(sorted(policy))))
+PY
+}
+cfg_resolve() {  # cfg_resolve <scalar|table> [key] [default] — the ONE reader for rtc-ship.json
+  # layered with the defaults template: repo value → template policy value → built-in default.
+  # scalar mode keeps cfg_get's exact output contract (default when unset, bools as 1/0); table
+  # mode prints key<TAB>value<TAB>source rows for --which-config, with the template's FULL PATH —
+  # the data dir is the least visible location, so where every value came from must be visible.
+  local mode=$1 key=${2-} def=${3-} top dfile
+  top=$(resolve_top)
+  dfile=$(defaults_file)
+  # An override that is SET but missing must fail loudly HERE (the read path) — never fall
+  # through to the default location while the operator believes the override is in force.
+  if [ -n "${RTC_DEFAULTS_FILE:-}" ] && [ ! -f "$dfile" ]; then
+    echo "✖ RTC_DEFAULTS_FILE is set to $dfile but the file is missing — fix the override or unset it" >&2
+    exit 2
+  fi
+  RTC_CFG_FILE="$top/rtc-ship.json" DEFAULTS_FILE="$dfile" POLICY_KEYS="$POLICY_KEYS" \
+    python3 - "$mode" "$key" "$def" <<'PY'
+import json, os, sys
+mode, key, default = sys.argv[1], sys.argv[2], sys.argv[3]
+policy = set(os.environ["POLICY_KEYS"].split())
+def load(p):
+    try:
+        return json.load(open(p))
+    except Exception:
+        return {}
+repo = load(os.environ["RTC_CFG_FILE"])
+extends = repo.get("extends") is not False
+df = os.environ["DEFAULTS_FILE"]
+tmpl = load(df) if (extends and os.path.isfile(df)) else {}
+def source_of(k):
+    if k in repo:
+        note = ""
+        if k in tmpl:
+            note = " (overrides template: %s)" % json.dumps(tmpl[k])
+        return repo[k], "repo" + note
+    if k in tmpl:
+        return tmpl[k], "template"
+    return None, "built-in default"
+if mode == "table":
+    print("defaults template: %s" % (df if os.path.isfile(df) else df + " (absent)"))
+    for k in sorted((policy | set(repo)) - {"extends"}):
+        v, src = source_of(k)
+        print("%s\t%s\t%s" % (k, json.dumps(v) if v is not None else "<unset>", src))
 else:
-    print(v)
+    v, _ = source_of(key)
+    if v is None:
+        print(default)
+    elif isinstance(v, bool):
+        print("1" if v else "0")
+    else:
+        print(v)
 PY
 }
 
@@ -1046,6 +1135,8 @@ case "${1:-}" in
   --check-versions) ;;
   --bump-versions) ;;
   --which-config)
+    ensure_defaults_template
+    validate_defaults_template
     git rev-parse --show-toplevel
     cfg_get "tag_prefix" "(none)"
     echo "default_branch: $(resolve_default_branch "$(git rev-parse --show-toplevel)")"
@@ -1053,6 +1144,8 @@ case "${1:-}" in
     if [ -n "$extras" ] && [ "$extras" != '""' ]; then
       echo "extra_version_surfaces: $extras"
     fi
+    echo "policy keys (repo value wins; template: user-level defaults):"
+    cfg_resolve table
     exit 0 ;;
   -*) echo "rtc-ship.sh: unrecognised option $1" >&2; usage >&2; exit 2 ;;
 esac
@@ -1107,6 +1200,11 @@ if [ "$gd" = "$cgd" ]; then
        "git worktree add -b <branch> <dir> origin/<default>" >&2
   exit 2
 fi
+# The user-level defaults template is ensured (created + announced on first use) and validated
+# HERE — after the door, before the first cfg_get consults it: a template carrying repo-specific
+# keys must fail the ship at the door, not surface as a mystery value mid-loop.
+ensure_defaults_template
+validate_defaults_template
 # -z, not -n: `[ -n "$out" ] || { dirty }` declares a CLEAN tree dirty and refuses every valid ship.
 [ -z "$(git status --porcelain)" ] || { echo "✖ $WT is dirty" >&2; exit 1; }
 BR=$(git branch --show-current)
@@ -1204,11 +1302,9 @@ if [ "$canon_ready" = 0 ] && [ "$STRICT" = 1 ]; then
   echo "  switch it back to $DEFAULT_BRANCH and commit or set aside its edits, or set the key to false" >&2
   exit 1
 fi
-if [ -z "$STRICT" ]; then
-  echo "💡 recommended: add \"require_default_branch_checkout\": true to rtc-ship.json — the ship then refuses" \
-       "unless this checkout is clean on $DEFAULT_BRANCH, so a release never goes out around work in progress." \
-       "Set it to false to keep shipping from any checkout state; either choice silences this note."
-fi
+# 1.6.0: no more per-ship nudge for an absent require_default_branch_checkout — the user-level
+# defaults template (created + announced once at first use) now carries the policy default, so
+# an absent repo key INHERITS it; the template's creation announcement replaces the repeated nudge.
 git fetch -q origin
 if [ "$canon_ready" = 1 ]; then
   git pull -q --ff-only origin "$DEFAULT_BRANCH"

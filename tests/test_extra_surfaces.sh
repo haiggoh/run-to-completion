@@ -218,4 +218,17 @@ is "which-config exits 0" "0" "$?"
 has "  it names the extra surface key" "$(cat "$D/w.out")" "extra_version_surfaces"
 has "  it lists the Cargo.lock surface" "$(cat "$D/w.out")" "src-tauri/Cargo.lock"
 
+echo "== an empty version argument is a LOUD failure, never an empty write (deferred minor 1) =="
+D="$TMP/fx9"; mkfx "$D"
+python3 "$RESOLVER" write "$D" "$SURFACES" "" >"$D/w.out" 2>&1
+is "write with an empty version exits 1" "1" "$?"
+is "  and the surfaces were NOT touched (still 0.1.0)" "1" "$(grep -c '0.1.0' "$D/src-tauri/Cargo.toml")"
+
+echo "== explicit-key json write on a ONE-LINE compact file (deferred minor 2) =="
+D="$TMP/fx10"; mkfx "$D"
+printf '{"bundle":{"version":"9.9.9-decoy"},"version":"0.1.0"}' > "$D/src-tauri/tauri.conf.json"
+python3 "$RESOLVER" write "$D" '[{"path":"src-tauri/tauri.conf.json","kind":"json","key":"version"}]' 0.2.0 >"$D/w.out" 2>&1
+is "compact one-line json: write exits 0" "0" "$?"
+is "  root version rewritten, nested decoy intact, rest byte-exact"    '{"bundle":{"version":"9.9.9-decoy"},"version":"0.2.0"}' "$(cat "$D/src-tauri/tauri.conf.json")"
+
 summary

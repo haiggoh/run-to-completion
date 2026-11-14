@@ -133,42 +133,60 @@ def json_write(text, s, new):
                 return "".join(lines)
         fail('%s: no "version" field' % s["path"])
     segs = s["key"].split(".")
-    path = []       # key stack, by depth
+    # Char-level scanner: tracks container depth and the key path as a stack while walking the
+    # text, so pretty-printed AND compact one-line JSON both work; a nested decoy with the same
+    # key name at a different path is never touched. The post-write re-extract in surface_write()
+    # catches any shape this mis-targets and fails instead of corrupting.
+    path = []       # keys of the open containers, one entry per depth level
     depth = 0
-    done = False
-    for idx, ln in enumerate(lines):
-        if done:
-            break
-        # structural braces only: braces inside strings must not move the depth
-        in_str = esc = False
-        opens = closes = 0
-        for ch in ln:
+    i, n = 0, len(text)
+    in_str = esc = False
+    while i < n:
+        ch = text[i]
+        if in_str:
             if esc:
                 esc = False
-            elif in_str and ch == "\\":
+            elif ch == "\\":
                 esc = True
             elif ch == '"':
-                in_str = not in_str
-            elif not in_str and ch in "{[":
-                opens += 1
-            elif not in_str and ch in "}]":
-                closes += 1
-        keym = re.match(r'\s*"((?:[^"\\]|\\.)+)"\s*:', ln)
-        if keym:
-            # path holds the container keys above this line; at this key the nesting depth is
-            # `depth`, so trim to depth-1 entries, then this key: path == segs means target
-            while len(path) >= depth:
+                in_str = False
+            i += 1
+            continue
+        if ch == '"':
+            # read the whole string, then decide key-vs-value by what follows (a colon)
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" and j + 1 < n else 1
+            sval = text[i + 1:j]
+            k = j + 1
+            while k < n and text[k] in " \t\r\n":
+                k += 1
+            if k < n and text[k] == ":":
+                while len(path) >= depth:
+                    path.pop()
+                path.append(sval)
+                if path == segs:
+                    v = k + 1
+                    while v < n and text[v] in " \t\r\n":
+                        v += 1
+                    if v >= n or text[v] != '"':
+                        fail('%s: json path "%s" does not hold a string value' % (s["path"], s["key"]))
+                    ve = v + 1
+                    while ve < n and text[ve] != '"':
+                        ve += 2 if text[ve] == "\\" and ve + 1 < n else 1
+                    return text[: v + 1] + new + text[ve:]
+                i = k + 1
+                continue
+            i = j + 1
+            continue
+        if ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+            while len(path) > depth:
                 path.pop()
-            path.append(keym.group(1))
-            if path == segs:
-                new_line = rewrite_line_token(ln, new)
-                if new_line is not None:
-                    lines[idx] = new_line
-                    done = True
-        depth += opens - closes
-    if not done:
-        fail('%s: could not rewrite json path "%s" in place' % (s["path"], s["key"]))
-    return "".join(lines)
+        i += 1
+    fail('%s: could not rewrite json path "%s" in place' % (s["path"], s["key"]))
 
 
 def toml_section_scan(text):
@@ -303,6 +321,8 @@ def main(argv):
         new = None
     elif len(argv) == 5 and argv[1] == "write":
         top, surfaces_arg, new = argv[2], argv[3], argv[4]
+        if not new:
+            fail("write needs a non-empty version — an empty one would rewrite the surfaces to \"\"")
     else:
         usage()
     surfaces = load_surfaces(surfaces_arg)

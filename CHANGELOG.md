@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.6.0] — 2026-11-14
+
+### Added — user-level defaults template (waypoint rtc-ship-user-level-default)
+
+- One `defaults.json` under the plugin data dir (RTC_DEFAULTS_FILE override, or
+  $CLAUDE_PLUGIN_DATA, else ~/.claude/plugins/data/run-to-completion/) whose POLICY keys
+  (require_default_branch_checkout, reap, stall_seconds, stall_retries, test_workers) every repo
+  inherits: a repo's own rtc-ship.json value always wins, `"extends": false` opts a repo out.
+  Created on the first ship / ship-config invocation (announced, full path printed); a
+  repo-specific key in the template is a loud exit-2 config error; an RTC_DEFAULTS_FILE that is
+  set but missing fails loudly. `--which-config` ends with a key | value | source table
+  (repo / template / built-in default) and always prints the template's full path. cfg_get is
+  layered through ONE shared resolver (cfg_resolve scalar|table — not a second reader).
+  19 cases in tests/test_ship_defaults.sh.
+
+### Fixed — resolver hardening (the deferred minors from the 1.5.0 review)
+
+- `rtc_version_surface.py` write with an empty version argument fails loudly instead of rewriting
+  surfaces to "".
+- Explicit-key json writes now use a char-level scanner: compact ONE-LINE JSON is rewritten
+  correctly (a nested decoy with the same key at a different path stays untouched); pretty-printed
+  files behave exactly as before. Both contracts pinned in test_extra_surfaces.sh (28 cases) and
+  test_rtc_ship.sh (92 cases); both mutations red.
+
+### Changed — writing-execution-plans moved to lasting-plans as plan-airtight
+
+- The execution-safety layer now ships as `lasting-plans:plan-airtight` (lasting-plans 1.3.0,
+  released FIRST so no reference dangles); this repo removes its copy. References updated:
+  CLAUDE.md Architectural Discipline, the milestone-QC playbook, README skill table.
+
 ## [1.5.0] — 2026-11-13
 
 ### Added — the three hardening items from the do-now triage

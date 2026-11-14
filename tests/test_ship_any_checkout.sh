@@ -29,7 +29,10 @@ is "  origin's default branch is the shipped tip" "$tip" "$(git -C "$D/origin.gi
 is "  the tag points at the shipped tip" "$tip" "$(git -C "$D/origin.git" rev-parse 'v0.2.0^{commit}')"
 has "  the release notes come from the SHIPPED changelog" "$(grep '^NOTES-BODY:' "$D/calls")" "second"
 is "  not from the canonical checkout's edit" "0" "$(grep -c 'work in progress' "$D/calls")"
-has "  and the loop recommends the strict rule" "$(cat "$D/out")" '"require_default_branch_checkout": true'
+# 1.6.0: an absent repo key now INHERITS the template's true (the template's one-time creation
+# announcement replaces the old per-ship nudge) — so the loop does NOT print the recommendation.
+is "  and the loop no longer nudges (the template carries the default)" "0" \
+   "$(grep -c 'recommended' "$D/out")"
 # On this route the default branch is checked out NOWHERE, so the cleanup sweep's $DEFAULT_BRANCH
 # skips are the only thing between it and `git branch -d main` / `git push origin --delete main`
 # (before 1.0.0 the ship required main checked out, and those skips were unreachable).

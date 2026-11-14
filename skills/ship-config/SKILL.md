@@ -17,7 +17,11 @@ and proves the result with the repo's own gate.
    header "Repo".
 2. **Show today's resolution.** Run `bash <repo>/bin/rtc-ship.sh --which-config` and
    `bash <repo>/bin/rtc-ship.sh --versions-only <repo>` from the repo root; paste both
-   outputs. A red gate here means: fix the surfaces BEFORE changing the config.
+   outputs. A red gate here means: fix the surfaces BEFORE changing the config. The
+   `--which-config` output ends with the policy-key source table (repo / template /
+   built-in default) and the FULL path of the user-level defaults template — read the
+   source column before changing a policy key, so you know whether a repo value is
+   overriding the template.
 3. **Which key?** AskUserQuestion, header "Key", options from the known set with current
    values in the labels: `tag_prefix`, `manifest`, `changelog`, `version_file`,
    `roadmap`, `extra_version_surfaces`, `assets`, `refresh_plugin`, `test_workers`,
