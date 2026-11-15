@@ -1,0 +1,60 @@
+---
+name: autopilot
+description: 'Use when the user asks to run a whole queue of open work unattended — "autopilot", "run everything you can", "clear what you can while I am away", "full auto on my open items". Orchestrates the complete run as an explicit checklist: triage the queue into tiers, execute the autonomous pile without stopping, then close out with a gated list. Start here rather than at an individual phase when the request covers the whole run.'
+---
+
+# autopilot — the entry point for a whole unattended run
+
+This skill orchestrates the complete run. It sequences three phase skills and adds the up-front kickoff. It does not duplicate their content.
+
+## Kickoff
+
+Do this once before triage:
+
+1. **Establish the resource picture.** Find out what you actually have to spend — time, a request or token quota, a cost cap if one exists at all — by checking, not by assuming. Many setups have no cap, and in those the answer is simply "no limit to plan around". Never conclude you are blocked without looking: if the user's prompts are being answered, the pipe is working.
+2. **Warm any delegate lanes.** A delegate is not necessarily one thing: local inference and free/cheap remote APIs are two independent lanes, and a run can use either or both — including in parallel, when independent items are ready at the same time and each lane has spare capacity. Start whichever lane(s) exist in the background so the first delegation is not a cold start. Capture whatever address, port, or endpoint each warm-up reports.
+3. **Ask blocking questions about THE RUN — and only about the run.** Scope, and permission for any push, publish, or confirmation-gated action. Ask for the **ship-loop depth** as one question — cleared through push, through merge to the default branch, through tag, or through release — rather than a bare yes to “may you push”, because the loop's later steps publish and a run with nobody present cannot widen its own permission when it reaches one. Do not stop for those again.
+
+   **Ask the run's scope as one neutral question:** a **scoped run** (an agreed set of items, and the
+   repositories they may touch) or a **whole-queue run** (everything triage finds actionable). Both are
+   equally legitimate; which fits depends on what the user intends that day, so neither is labelled
+   recommended and neither is assumed when the answer is missing — no answer, no start. In a scoped run,
+   record the agreed items and repositories where the run's goal lives, triage and execute only those,
+   and report anything else you come across as "noticed, not touched" in the close-out.
+
+   **The asymmetry that makes this work:** kickoff questions are about the *run*; a question about a *specific item* discovered during triage becomes a **gate on that item**, never a kickoff question. Otherwise kickoff degenerates into interrogating sixty items one by one, which defeats the entire point of "clear what you can while I am away" — the user walks away precisely so they do not have to answer things.
+
+   The corollary cuts the other way and is just as important: **a known question is a gate, and work sitting *before* that question is actionable.** So an item that ends in a question is not thereby excluded from the run.
+
+   Contrast this with an *attended* run-to-completion, where the user is present: there, prefer surfacing and clearing gates as early as you can, because an answer is cheap and immediately unblocks work. Same plugin, opposite instinct, decided by whether anyone is there to answer.
+
+## The checklist
+
+Create one tracked todo per phase, in order:
+1. Triage (`triage-for-autonomy`)
+2. Execute (`execute-unattended`)
+3. Close out (`close-out-the-run`)
+
+Work them in sequence. The checklist form matters because an orchestrator can only instruct, not force. A written checklist is what makes the sequence hold across a long run.
+
+## The loop
+
+After finishing a batch, re-triage rather than following the original order blindly. New information changes tiers.
+
+## Hand-offs
+
+If a persistent open-items store exists, that is the queue. If a local-execution capability or a free/cheap remote-API lane exists, route delegatable steps to whichever fits — by availability, by which is idle, or split across both when several independent items are ready together. If a reconciliation discipline exists, the closing phase uses it. None of these are required for autopilot to work.
+
+## Attended alternative
+
+If the user is available and wants to clear blockers rather than have work done unattended, that is `ungate-queue`, not this.
+
+That pass is deliberately narrow: it removes gates and records the answers, and does **not** do the work it releases. So expect it to hand back a set of newly-actionable items rather than finished ones — and expect the next run of this checklist to be where they actually get done. If a queue has just been ungated, re-triage before executing: the released items belong in the ranking with everything else.
+
+## When NOT to use this
+
+Use `triage-for-autonomy`, `execute-unattended`, or `close-out-the-run` directly if you are already in a specific phase.
+
+## Branding (🏃)
+
+When you begin working under this skill, lead your first substantive reply with "🏃✈️ autopilot:" so the user can see which plugin just became active and that this is an autopilot run — ✈️ is autopilot's own mark, the way 🚢 is the ship tool's.

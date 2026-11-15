@@ -1,0 +1,1611 @@
+#!/usr/bin/env bash
+# 🚢 rtc-ship.sh — ship one milestone branch of ANY repo: rebase on origin/<default-branch>, the test
+# gates, fast-forward merge into that branch, an annotated tag built from the CHANGELOG entry, push,
+# a GitHub release with the repo's distributables, then refresh the installed plugin.
+#
+# "main" IN PROSE MEANS THE DEFAULT BRANCH, whatever it is called — `main` in most repos, `master`
+# in some. A request to "merge to main" is resolved to this repo's actual default branch — never to
+# a branch literally named main, and certainly never by CREATING one, which would be a second
+# default and the worst kind of confusion.
+#
+# WHY THIS EXISTS. A ship loop run by hand fails most often not by a wrong step but by a SKIPPED
+# one: the version bump usually lands after the test suite has run, so the version surfaces can
+# drift apart between "tests green" and the merge, and only a re-check at that point catches it.
+# So the gates live here, in one place, and a repo cannot skip them by forgetting to run them.
+#
+# Usage:
+#   rtc-ship.sh <worktree-dir> <version> "<release title summary>"   <worktree-dir> must be a LINKED
+#               worktree: the canonical checkout (or any non-work-tree directory) is refused, exit 2
+#   rtc-ship.sh <worktree-dir> <version> "<title>" --no-reap   keep worktree and branches, this ship only
+#   rtc-ship.sh --test-only <worktree-dir>    run the gates and stamp the tree, ship nothing
+#   rtc-ship.sh --versions-only <worktree-dir>  the version gate alone (fast, pre-commit)
+#   rtc-ship.sh --check-versions <worktree-dir>  alias of --versions-only (check-only, writes nothing)
+#   rtc-ship.sh --bump-versions <worktree-dir> <version>  rewrite the declared version surfaces
+#   rtc-ship.sh --which-config                print the config this repo would use and exit
+#   rtc-ship.sh --help
+#
+# Exit codes (the same vocabulary on every surface — the ship loop, --test-only, --versions-only):
+#   0     success
+#   1     a gate, the version check, or a later ship step failed
+#   2     usage or config error (unknown flag, bad version argument, invalid rtc-ship.json value),
+#         or the door refused the target: the canonical checkout / not inside a git work tree
+#   124   a gate STALLED — no output and no CPU for the stall window (the timeout(1) convention).
+#         It dominates a mixed run (a stall beats an ordinary failure). Callers may branch on 124
+#         (e.g. re-run with RTC_BASELINE=1 for a branch-only vs pre-existing label); any non-zero
+#         exit is still a failure, so existing callers keep working.
+#
+# Per-repo specifics live in TWO places, both inside the repo being shipped:
+#   rtc-ship.json   DATA the tool needs: the tag prefix, which version surfaces to check, release
+#                   asset globs, the plugin to refresh, test worker count, the stall window
+#                   ("stall_seconds"), and "reap": false to permanently keep worktrees and merged
+#                   branches (reaping is the default).
+#                   "require_default_branch_checkout": true (RECOMMENDED) refuses to ship unless the
+#                   canonical checkout is clean on the default branch; unset, the ship goes around it.
+#                   "extra_version_surfaces": [...] — extra files whose version token the gate reads
+#                   AND --bump-versions writes through ONE shared resolver (bin/rtc_version_surface.py):
+#                   {"path": <rel>, "kind": "json"|"toml-package"|"cargo-lock",
+#                    "key": <dotted json path, json only — given: that path, depth-aware; omitted:
+#                    the first "version" field in document order>,
+#                    "crate": <name, cargo-lock only; a crate duplicated across [[package]] blocks
+#                    is refused, never picked>} — e.g. tauri.conf.json, Cargo.toml's [package]
+#                    table, a crate's [[package]] block in Cargo.lock.
+#   .rtc/*.sh       COMMANDS only that repo has, run at named points if present and executable:
+#                     pre-flight.sh     extra gates, before anything else (a second venv's suite)
+#                     pre-package.sh    build the release assets
+#                     post-release.sh   after the release (a Homebrew tap trigger, say)
+#                   A repo with none of these is fully supported — hooks are opt-in by presence.
+#
+# Env:
+#   RTC_MAIN            canonical checkout (default: derived from the worktree's git common dir)
+#   RTC_SKIP_TESTS=1    skip the suite gates (prefer the tree stamp: a green run of THIS tree self-skips)
+#   RTC_TEST_WORKERS    xdist workers for the main suite (beats rtc-ship.json test_workers; default 12)
+#   RTC_STALL_SECONDS   seconds of NO output and NO CPU time before a stuck test gate is killed
+#                       and failed as STALLED (default 600; rtc-ship.json "stall_seconds" sits
+#                       between this env var and the default in precedence)
+#   RTC_STALL_POLL      (tests only) seconds between the watchdog's stall samples (default 15)
+#   RTC_STALL_RETRIES   whether a STALLED gate is re-run ONCE after a stall (default 1 = retry
+#                       once; 0 = never retry, the pre-1.4.0 behaviour; values > 1 still mean one
+#                       retry; rtc-ship.json "stall_retries" sits between this env var and the
+#                       default). A SET but invalid value exits 2 naming the key, before any gate
+#                       launches. A stall that passes on retry is reported loudly (⚠ recovered
+#                       line + <log>.attempt1 / <log>.attempt1.stall kept).
+#   RTC_BASELINE=1      after a failed gate, re-run that gate on origin/<default> in a throwaway
+#                       worktree and label its failed lines branch-only vs pre-existing
+#                       (diagnosis only — the gate still fails)
+#   RTC_SKIP_REFRESH=1  do not refresh the installed plugin after a confirmed release
+#                       (refresh = get-haiggoh when installed, else `claude plugin update`
+#                       against rtc-ship.json's refresh_marketplace, default haiggoh)
+#   RTC_TAG_VISIBILITY=0        skip the published-manifest check (default: on, it gates the release)
+#   RTC_TAG_VISIBILITY_TRIES    polls before giving up (default 6; the CDN window is ~1 minute)
+#   RTC_TAG_VISIBILITY_DELAY    seconds between polls (default 20)
+#   RTC_SKIP_CLEANUP=1  keep the shipped worktree and every branch after a confirmed release
+#                       (opt-outs for cleanup, reaping being the default: this env var, the
+#                       transient --no-reap flag, or "reap": false in rtc-ship.json permanently)
+#   RTC_BACKUP_DIR      where uncommitted files are backed up before their worktree is reaped
+#                       (default $HOME/.claude/backups/worktrees); a backup that cannot be written
+#                       KEEPS the worktree
+#   RTC_SHIP_LOG_DIR    where each phase's full output is kept: rebase, pre-package, the upload
+#                       (default ${TMPDIR:-/tmp}/rtc-ship-logs/<repo>-<version>); a failing phase
+#                       prints its verdict and the last 15 lines either way
+set -euo pipefail
+
+# Print every header comment line up to the first line of real code. NOT a hardcoded line range:
+# `sed -n '2,31p'` silently hid every line added past 31, which is how a gate shipped with its own
+# env vars documented in the source and invisible in --help (measured on 0.6.11). NR==1 skips the
+# shebang: with only `NR>1` the first line printed with its '#' stripped, so --help led with
+# '!/usr/bin/env bash' (found 2026-10-28).
+usage() { awk 'NR==1 {next} !/^#/ {exit} {sub(/^# ?/, ""); print}' "$0"; }
+# The directory this script runs from — the sibling rtc_version_surface.py (the ONE shared
+# extra-version-surface resolver) lives here, whether this is a checkout, a worktree or the
+# installed plugin cache.
+RTC_SHIP_DIR=$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+T0=${SECONDS:-0}
+phase() { printf '[%4ss] %s\n' "$((SECONDS - T0))" "$*"; }
+# A phase whose output goes to /dev/null cannot be judged from the log: "ran quietly" and "died
+# silently, having done nothing" print the same nothing. fa-ship.sh learned this on 2026-10-26 on its
+# packaging step and grew run_logged — one day AFTER this script was ported from it, so the port ran
+# pre-package and the upload `>/dev/null` (found by the 2026-10-28 parity sweep). Capture, print a
+# verdict, and on failure show the tail of what the step itself said.
+run_logged() {  # run_logged <label> <log> <cmd...>
+  local label=$1 log=$2 rc; shift 2
+  mkdir -p "$(dirname "$log")"
+  phase "$label — running"
+  if "$@" >"$log" 2>&1; then
+    phase "✓ $label — done, $(wc -l <"$log" | tr -d ' ') log lines ($log)"
+  else
+    rc=$?
+    phase "✖ $label — FAILED (exit $rc); last 15 lines of $log:"
+    tail -n 15 "$log" | sed 's/^/      /' >&2
+    return "$rc"
+  fi
+}
+
+# ----------------------------------------------------------------------------------------------
+# The gate stall watchdog. A gate producing NEITHER output NOR CPU time for stall_seconds is
+# stuck, not slow: watch_gate ends it as a named STALLED failure with a <log>.stall diagnosis
+# (process tree as comm — never argv, which can carry secrets — plus the log tail) and kills only
+# that tree. CPU time is counted in CENTISECONDS, not seconds: a healthy gate at ~0.05% CPU gains
+# under 1 s per 600 s window, and whole seconds would read that as a stall.
+# ----------------------------------------------------------------------------------------------
+
+stall_seconds() {  # the stall window in seconds: RTC_STALL_SECONDS > rtc-ship.json "stall_seconds" > 600
+  local v src
+  if [ -n "${RTC_STALL_SECONDS:-}" ]; then v=$RTC_STALL_SECONDS; src="RTC_STALL_SECONDS"
+  else v=$(cfg_get "stall_seconds" "600"); src='rtc-ship.json "stall_seconds"'; fi
+  case "$v" in
+    ''|*[!0-9]*|0) echo "✖ $src must be a positive integer (seconds), got '$v'" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$v"
+}
+
+stall_retries() {  # how often a STALLED gate is re-run: RTC_STALL_RETRIES > rtc-ship.json
+                   # "stall_retries" > 1. Non-negative integer only (0 = never retry, the pre-1.4.0
+                   # behaviour); anything else is a config error: return 1, and gates() turns that
+                   # into exit 2 at the door, before any gate launches (same rule as stall_seconds).
+  local v src
+  if [ -n "${RTC_STALL_RETRIES:-}" ]; then v=$RTC_STALL_RETRIES; src="RTC_STALL_RETRIES"
+  else v=$(cfg_get "stall_retries" "1"); src='rtc-ship.json "stall_retries"'; fi
+  case "$v" in
+    ''|*[!0-9]*) echo "✖ $src must be a non-negative integer, got '$v'" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$v"
+}
+
+timeout_vs_stall_warn() {  # timeout_vs_stall_warn <label> <text> — if <text> carries a per-test
+                           # --timeout[= ]<N> with N >= the stall window, print a ⚠ phase line
+                           # naming both numbers: the watchdog always kills a stalled gate first,
+                           # so a pytest-timeout dump at that N can never print. The LARGEST N
+                           # wins; --timeout-method=… is not a timeout. Never changes rc.
+  local label=$1 text=$2 tok n best=0 stall
+  stall=$(stall_seconds) || return 0
+  for tok in $(printf '%s' "$text" | grep -oE -- '--timeout[= ][0-9]+' 2>/dev/null); do
+    n=${tok##*[= ]}
+    case "$n" in ''|*[!0-9]*) continue ;; esac
+    if [ "$n" -gt "$best" ]; then best=$n; fi
+  done
+  [ "$best" -gt 0 ] || return 0
+  if [ "$best" -ge "$stall" ]; then
+    phase "⚠ $label: per-test --timeout=${best}s ≥ stall window ${stall}s"
+  fi
+  return 0
+}
+
+tree_pids() {  # tree_pids <pid> — the pid and every descendant pid, one per line (recursive pgrep -P)
+  local c
+  printf '%s\n' "$1"
+  for c in $(pgrep -P "$1" 2>/dev/null); do tree_pids "$c"; done
+}
+
+tree_cpu() {  # tree_cpu <pid> — tree_pids' summed cumulative CPU in CENTISECONDS; a vanished pid
+              # contributes 0. ps -o time= prints [[dd-]hh:]mm:ss[.cc] (macOS: 0:00.01).
+  local total=0 pid t rest frac secs dd hh mm ss
+  for pid in $(tree_pids "$1"); do
+    t=$(ps -o time= -p "$pid" 2>/dev/null || :)
+    t=${t//[[:space:]]/}
+    [ -n "$t" ] || continue
+    rest=$t; frac=0
+    case "$t" in
+      *.*)
+        frac=${t##*.}; rest=${t%.*}
+        case "$frac" in [0-9]) frac="${frac}0" ;; esac     # tenths -> centiseconds
+        case "$frac" in ''|*[!0-9]*) continue ;; esac      # a garbled field contributes 0
+        frac=${frac%"${frac#??}"}                          # keep at most two digits
+        ;;
+    esac
+    secs=0
+    case "$rest" in
+      *-*) dd=${rest%%-*}; rest=${rest#*-}
+           case "$dd" in ''|*[!0-9]*) continue ;; esac
+           secs=$(( 10#$dd * 86400 )) ;;
+    esac
+    case "$rest" in
+      *:*:*) hh=${rest%%:*}; mm=${rest#*:}; mm=${mm%%:*}; ss=${rest##*:} ;;
+      *:*)   hh=0; mm=${rest%%:*}; ss=${rest#*:} ;;
+      *)     hh=0; mm=0; ss=$rest ;;
+    esac
+    case "$hh" in ''|*[!0-9]*) continue ;; esac
+    case "$mm" in ''|*[!0-9]*) continue ;; esac
+    case "$ss" in ''|*[!0-9]*) continue ;; esac
+    total=$(( total + (secs + 10#$hh * 3600 + 10#$mm * 60 + 10#$ss) * 100 + 10#$frac ))
+  done
+  printf '%s\n' "$total"
+}
+
+kill_tree() {  # kill_tree <pid> — TERM the gate's tree, then KILL whatever survives the grace;
+               # RTC_STALL_KILL_GRACE (tests only, default 5) sets the TERM->KILL seconds.
+  local pid=$1 grace p tree waited=0
+  grace=${RTC_STALL_KILL_GRACE:-5}
+  case "$grace" in ''|*[!0-9]*) grace=5 ;; esac
+  tree=$(tree_pids "$pid")     # snapshot while the tree is alive: TERM can reparent children
+  for p in $tree; do kill -TERM "$p" 2>/dev/null || :; done
+  while [ "$waited" -lt "$grace" ]; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  for p in $tree $(tree_pids "$pid" 2>/dev/null); do kill -KILL "$p" 2>/dev/null || :; done
+  :
+}
+
+stall_dump_block() {  # stall_dump_block <log> — the per-test timeout dump (pytest-timeout's
+                      # "++++ Timeout ++++" header line plus the "~~~ Stack of …" frames) copied
+                      # from the FIRST header line, bounded at 200 lines. Prints the section
+                      # header "-- per-test timeout dump --" first; prints NOTHING when the log
+                      # has no dump marker (a plain stall has none). Always returns 0: a missing
+                      # or unreadable log simply means "no dump".
+  awk '
+    !found && substr($0, 1, 1) == "+" && index($0, " Timeout ") > 0 {
+      found = 1; print "-- per-test timeout dump --"
+    }
+    found { print; n++; if (n >= 200) exit }
+  ' "$1" 2>/dev/null || :
+}
+
+watch_gate() {  # watch_gate <label> <log> <pid> — wait for the gate command; return its exit
+                # status, or 124 after a stall, having written <log>.stall and killed the tree.
+                # Stall = BOTH the log size and the tree CPU unchanged across consecutive samples
+                # spanning >= stall_seconds; samples every ${RTC_STALL_POLL:-15} s.
+  local label=$1 log=$2 pid=$3
+  local stall poll size cpu last_size=-1 last_cpu=-1 stall_start now rc
+  stall=$(stall_seconds) || return 1
+  poll=${RTC_STALL_POLL:-15}
+  case "$poll" in ''|*[!0-9]*|0) poll=15 ;; esac
+  while :; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      rc=0; wait "$pid" || rc=$?
+      return "$rc"
+    fi
+    size=$(wc -c <"$log" 2>/dev/null || printf 0)
+    size=${size//[!0-9]/}; [ -n "$size" ] || size=0
+    cpu=$(tree_cpu "$pid")
+    now=$SECONDS
+    if [ "$size" != "$last_size" ] || [ "$cpu" != "$last_cpu" ]; then
+      stall_start=$now                                   # progress: restart the quiet window
+    elif [ $((now - stall_start)) -ge "$stall" ]; then
+      {
+        printf 'STALLED %s: no output and no CPU for %ss\n' "$label" "$stall"
+        ps -o pid=,ppid=,stat=,etime=,time=,comm= \
+          -p "$(tree_pids "$pid" | paste -s -d, -)" 2>/dev/null || :
+        tail -n 30 "$log" 2>/dev/null || :
+        # The per-test timeout dump rides along: when a pytest gate's --timeout fired, this is the
+        # stack that names the wedged test (the watchdog's own window usually kills the gate first).
+        stall_dump_block "$log"
+      } >"$log.stall"
+      kill_tree "$pid"
+      return 124
+    fi
+    last_size=$size; last_cpu=$cpu
+    sleep "$poll"
+  done
+}
+
+rerun_gate() {  # rerun_gate <label> <log> <cmd> — keep the first attempt's artefacts
+               # (<log>→<log>.attempt1, <log>.stall→<log>.attempt1.stall), relaunch the gate,
+               # return watch_gate's rc for the retry.
+  local label=$1 log=$2 cmd=$3 pid wrc
+  if [ -f "$log" ]; then mv "$log" "$log.attempt1"; fi
+  if [ -f "$log.stall" ]; then mv "$log.stall" "$log.attempt1.stall"; fi
+  bash -c "$cmd" </dev/null >"$log" 2>&1 &
+  pid=$!
+  wrc=0; watch_gate "$label" "$log" "$pid" || wrc=$?
+  return "$wrc"
+}
+
+watch_maybe_retry() {  # watch_maybe_retry <label> <log> <cmd> <pid> <retries> — watch a RUNNING
+                       # gate; on a stall with retries left, re-run it ONCE via rerun_gate (only
+                       # that gate — never the whole set). Sets GATE_RC (0 pass / 124 final stall /
+                       # other = ordinary failure) and GATE_RECOVERED=1 when the retry passed.
+                       # <retries> is resolved by the CALLER before any fork: a config error must
+                       # never leave a launched gate unsupervised (validator minor M3). Always
+                       # returns 0: classification is the caller's.
+  local label=$1 log=$2 cmd=$3 pid=$4 retries=$5 wrc
+  GATE_RECOVERED=0
+  wrc=0; watch_gate "$label" "$log" "$pid" || wrc=$?
+  if [ "$wrc" = 124 ] && [ "$retries" -gt 0 ]; then
+    phase "⚠ $label STALLED — retrying once (first attempt kept as ${log}.attempt1 / ${log}.attempt1.stall)"
+    wrc=0; rerun_gate "$label" "$log" "$cmd" || wrc=$?
+    if [ "$wrc" = 0 ]; then
+      GATE_RECOVERED=1
+      phase "⚠ $label STALLED once — passed on retry (diagnosis kept in ${log}.attempt1.stall)"
+    fi
+  fi
+  GATE_RC=$wrc
+  return 0
+}
+
+gate_once() {  # gate_once <label> <log> <cmd> — launch <cmd> and watch it with the stall retry.
+               # Resolves stall_retries BEFORE the fork: an invalid value returns 2 with NO gate
+               # launched (M3), instead of leaving a running gate unsupervised.
+  local label=$1 log=$2 cmd=$3 retries
+  retries=$(stall_retries) || return 2
+  bash -c "$cmd" </dev/null >"$log" 2>&1 &
+  watch_maybe_retry "$label" "$log" "$cmd" "$!" "$retries"
+}
+
+_gate_fail_keys() {  # _gate_fail_keys <log> — the test keys of FAILED/ERROR (pytest) and "  FAIL " lines
+  { grep -E '^(FAILED|ERROR) ' "$1" 2>/dev/null || :; } | awk '{print $2}'
+  { grep -E '^  FAIL ' "$1" 2>/dev/null || :; } | sed 's/^  FAIL //'
+}
+
+baseline_classify() {  # baseline_classify <label> <failed-log> — RTC_BASELINE=1 only: re-run the
+                       # failed gate on origin/<default> in a throwaway worktree under watch_gate,
+                       # then label the failed lines branch-only vs pre-existing. Diagnosis only —
+                       # never changes rc; the worktree is removed (also by trap) when done.
+  local label=$1 failed=$2 top def tmp wt bl kf kb old_trap bcmd bpid wrc2
+  top=$(git rev-parse --show-toplevel)
+  def=$(resolve_default_branch "$top")
+  tmp=$(mktemp -d) || return 0
+  wt="$tmp/wt"
+  if ! git -C "$top" worktree add --detach "$wt" "origin/$def" >/dev/null 2>&1; then
+    phase "baseline: cannot create a worktree at origin/$def — labels skipped"
+    rm -rf "$tmp"
+    return 0
+  fi
+  old_trap=$(trap -p EXIT)
+  trap 'git -C "$top" worktree remove --force "$wt" >/dev/null 2>&1; rm -rf "$tmp"' EXIT
+  bl="$tmp/baseline.log"
+  phase "baseline: re-running '$label' on origin/$def"
+  bcmd=""
+  case "$label" in
+    "tests (config)") bcmd=$(RTC_REPO_ROOT="$wt" cfg_get "test_cmd" "") ;;
+    "pytest main")
+      if [ -x "$HOME/.local/bin/pytest" ]; then bcmd="$HOME/.local/bin/pytest -q tests -p no:cacheprovider"
+      elif command -v pytest >/dev/null 2>&1; then bcmd="pytest -q tests -p no:cacheprovider"
+      else bcmd="python3 -m pytest -q tests -p no:cacheprovider"; fi ;;
+    "pre-flight gates") if [ -x "$wt/.rtc/pre-flight.sh" ]; then bcmd="./.rtc/pre-flight.sh"; fi ;;
+  esac
+  if [ -n "$bcmd" ]; then
+    ( cd "$wt" && bash -c "$bcmd" </dev/null >"$bl" 2>&1 ) &
+    bpid=$!
+    wrc2=0; watch_gate "baseline" "$bl" "$bpid" || wrc2=$?
+    if [ "$wrc2" = 124 ]; then phase "baseline: also STALLED on origin/$def — diagnosis in $bl.stall"; fi
+  fi
+  kf="$tmp/branch.keys"; kb="$tmp/base.keys"
+  _gate_fail_keys "$failed" | sort -u >"$kf"
+  _gate_fail_keys "$bl" 2>/dev/null | sort -u >"$kb"
+  echo "branch-only:"
+  comm -23 "$kf" "$kb" | sed 's/^/  /'
+  echo "pre-existing:"
+  comm -12 "$kf" "$kb" | sed 's/^/  /'
+  git -C "$top" worktree remove --force "$wt" >/dev/null 2>&1
+  rm -rf "$tmp"
+  if [ -n "$old_trap" ]; then eval "$old_trap"; else trap - EXIT; fi
+  return 0
+}
+
+# ----------------------------------------------------------------------------------------------
+# Config: DATA comes from rtc-ship.json; COMMANDS come from .rtc/*.sh. Neither is guessed.
+# ----------------------------------------------------------------------------------------------
+
+resolve_top() {  # the repo root, or $PWD where there is NO git repo (see below)
+  local base=${RTC_REPO_ROOT:-$PWD} t
+  t=$(git -C "$base" rev-parse --show-toplevel 2>/dev/null) || t=""
+  printf '%s\n' "${t:-$base}"
+}
+
+cfg_get() {  # cfg_get <key> [default] — one scalar out of rtc-ship.json, layered over the
+             # user-level defaults template (waypoint rtc-ship-user-level-default)
+  local key=$1 def=${2-} top toplevel
+  top=$(resolve_top)
+  cfg_resolve scalar "$key" "$def"
+}
+
+# --- the user-level defaults template (waypoint rtc-ship-user-level-default) -------------------
+# One defaults.json under the plugin data dir whose POLICY keys every repo INHERITS: a repo's own
+# rtc-ship.json value always wins, and "extends": false opts a repo out entirely. POLICY keys are
+# machine/behaviour preferences; a REPO-specific key (paths, names, branches) inside the template
+# is a loud config error, exit 2 — the template can never impose one repo's paths on another.
+POLICY_KEYS="require_default_branch_checkout reap stall_seconds stall_retries test_workers"
+defaults_file() {  # the template path, PURE resolver — the set-but-missing override check lives
+                   # in the READ path (cfg_resolve), not here: ensure_defaults_template must be
+                   # able to resolve a path whose file does not exist yet (it is about to create it)
+  if [ -n "${RTC_DEFAULTS_FILE:-}" ]; then
+    printf '%s\n' "$RTC_DEFAULTS_FILE"; return 0
+  fi
+  if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
+    printf '%s\n' "$CLAUDE_PLUGIN_DATA/defaults.json"; return 0
+  fi
+  printf '%s\n' "$HOME/.claude/plugins/data/run-to-completion/defaults.json"
+}
+ensure_defaults_template() {  # created on the FIRST ship / ship-config invocation; announced.
+  # Never auto-creates at an RTC_DEFAULTS_FILE override path: the override points at a file the
+  # operator says EXISTS — silently writing it would mask a typo'd path (the read path's
+  # set-but-missing check is what must fire there, not a quiet creation).
+  if [ -n "${RTC_DEFAULTS_FILE:-}" ]; then return 0; fi
+  local f; f=$(defaults_file)
+  if [ ! -f "$f" ]; then
+    mkdir -p "$(dirname "$f")" 2>/dev/null || { echo "✖ cannot create the defaults directory for $f" >&2; exit 2; }
+    printf '{\n  "require_default_branch_checkout": true\n}\n' > "$f" \
+      || { echo "✖ cannot write the defaults template $f" >&2; exit 2; }
+    phase "📜 created the user-level defaults template $f — its POLICY keys every repo inherits (\"extends\": false opts a repo out)"
+  fi
+}
+validate_defaults_template() {  # policy keys only; a repo-specific key is a loud config error
+  local f; f=$(defaults_file)
+  [ -f "$f" ] || return 0
+  DEFAULTS_FILE="$f" POLICY_KEYS="$POLICY_KEYS" python3 - <<'PY' || exit 2
+import json, os, sys
+path = os.environ["DEFAULTS_FILE"]
+policy = set(os.environ["POLICY_KEYS"].split())
+try:
+    d = json.load(open(path))
+except Exception as e:
+    sys.exit('✖ the defaults template %s is not valid JSON: %s' % (path, e))
+if not isinstance(d, dict):
+    sys.exit('✖ the defaults template %s must be a JSON object' % path)
+bad = sorted(k for k in d if k != "extends" and k not in policy)
+if bad:
+    sys.exit('✖ the defaults template %s holds repo-specific key(s) %s — the template carries POLICY '
+             'keys only (%s)' % (path, ", ".join(bad), ", ".join(sorted(policy))))
+PY
+}
+cfg_resolve() {  # cfg_resolve <scalar|table> [key] [default] — the ONE reader for rtc-ship.json
+  # layered with the defaults template: repo value → template policy value → built-in default.
+  # scalar mode keeps cfg_get's exact output contract (default when unset, bools as 1/0); table
+  # mode prints key<TAB>value<TAB>source rows for --which-config, with the template's FULL PATH —
+  # the data dir is the least visible location, so where every value came from must be visible.
+  local mode=$1 key=${2-} def=${3-} top dfile
+  top=$(resolve_top)
+  dfile=$(defaults_file)
+  # An override that is SET but missing must fail loudly HERE (the read path) — never fall
+  # through to the default location while the operator believes the override is in force.
+  if [ -n "${RTC_DEFAULTS_FILE:-}" ] && [ ! -f "$dfile" ]; then
+    echo "✖ RTC_DEFAULTS_FILE is set to $dfile but the file is missing — fix the override or unset it" >&2
+    exit 2
+  fi
+  RTC_CFG_FILE="$top/rtc-ship.json" DEFAULTS_FILE="$dfile" POLICY_KEYS="$POLICY_KEYS" \
+    python3 - "$mode" "$key" "$def" <<'PY'
+import json, os, sys
+mode, key, default = sys.argv[1], sys.argv[2], sys.argv[3]
+policy = set(os.environ["POLICY_KEYS"].split())
+def load(p):
+    try:
+        return json.load(open(p))
+    except Exception:
+        return {}
+repo = load(os.environ["RTC_CFG_FILE"])
+extends = repo.get("extends") is not False
+df = os.environ["DEFAULTS_FILE"]
+tmpl = load(df) if (extends and os.path.isfile(df)) else {}
+def source_of(k):
+    if k in repo:
+        note = ""
+        if k in tmpl:
+            note = " (overrides template: %s)" % json.dumps(tmpl[k])
+        return repo[k], "repo" + note
+    if k in tmpl:
+        return tmpl[k], "template"
+    return None, "built-in default"
+if mode == "table":
+    print("defaults template: %s" % (df if os.path.isfile(df) else df + " (absent)"))
+    for k in sorted((policy | set(repo)) - {"extends"}):
+        v, src = source_of(k)
+        print("%s\t%s\t%s" % (k, json.dumps(v) if v is not None else "<unset>", src))
+else:
+    v, _ = source_of(key)
+    if v is None:
+        print(default)
+    elif isinstance(v, bool):
+        print("1" if v else "0")
+    else:
+        print(v)
+PY
+}
+
+cfg_get_raw() {  # cfg_get_raw <key> [default] — the RAW json value (arrays/objects stay intact)
+  local key=$1 def=${2-} top
+  top=$(resolve_top)
+  RTC_CFG_FILE="$top/rtc-ship.json" python3 - "$key" "$def" <<'PY'
+import json, os, sys
+key, default = sys.argv[1], sys.argv[2]
+try:
+    with open(os.environ["RTC_CFG_FILE"]) as f:
+        v = json.load(f).get(key)
+except Exception:
+    v = None
+print(json.dumps(v) if v is not None else default)
+PY
+}
+
+# ----------------------------------------------------------------------------------------------
+# The version gate. The repo's OWN test wins when it has one; otherwise the config's declared
+# surfaces are checked here. Both paths print the table and both exit non-zero on a split — the
+# point of this script is that the gate cannot be skipped by not running it.
+# ----------------------------------------------------------------------------------------------
+
+resolve_default_branch() {  # resolve_default_branch <repo> — config, then origin/HEAD, then main
+  # ONE resolver for the ship and for --which-config, so the tests can ask the real script.
+  local b
+  b=$(cfg_get "default_branch" "")
+  [ -n "$b" ] || b=$(git -C "$1" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+  printf '%s\n' "${b:-main}"
+}
+
+roadmap_target() {  # roadmap_target <file> read|write [new-version] — the ONE resolver for gate AND bump
+  # The gate and the bump MUST resolve the same target or they drift (waypoint
+  # run-to-completion-bump: on free-agents 0.50.2 two separate implementations disagreed and
+  # the bump rewrote a historical version in the preamble). Resolution order:
+  #   1. a '## Current released version'-style heading: the first version token in its section
+  #      (free-agents docs/ROADMAP.md keeps the version in backticks on the line AFTER the
+  #      heading; the preamble above cites historical versions that must never be rewritten)
+  #   2. else the first VERSIONED heading
+  #   3. else the first version-shaped token (legacy plain-prose roadmaps)
+  # read prints the current version (empty = no target, which the GATE treats as a failure);
+  # write rewrites exactly that occurrence, atomically.
+  python3 - "$@" <<'PY'
+import os, re, sys
+path, mode = sys.argv[1], sys.argv[2]
+newv = sys.argv[3] if len(sys.argv) > 3 else None
+if mode not in ("read", "write") or (mode == "write" and not newv):
+    sys.exit("usage: roadmap_target <file> read|write [new-version]")
+text = open(path).read()
+lines = text.splitlines(keepends=True)
+ver = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+
+def write_atomic(data):
+    tmp = path + ".bump-tmp"
+    with open(tmp, "w") as fh:
+        fh.write(data)
+    os.replace(tmp, path)
+
+# 1) 'Current released version' section — from the heading line up to the next heading
+for i, ln in enumerate(lines):
+    if re.match(r"^##+[ \t]+.*current[ \t]+released[ \t]+version.*$", ln, re.I):
+        end = len(lines)
+        for k in range(i + 1, len(lines)):
+            if re.match(r"^##+", lines[k]):
+                end = k
+                break
+        for j in range(i, end):
+            m = ver.search(lines[j])
+            if m:
+                if mode == "read":
+                    print(m.group(0))
+                else:
+                    lines[j] = lines[j][:m.start()] + newv + lines[j][m.end():]
+                    write_atomic("".join(lines))
+                    print("  current-version line -> %s" % newv)
+                sys.exit(0)
+        # the heading exists but its section holds no version: EMPTY is the answer (the gate
+        # fails on it) — never fall through to a historical token below the section
+        if mode == "read":
+            sys.exit(0)
+        sys.exit('✖ %s: the "current released version" section holds no version' % path)
+# 2) first versioned heading
+m = re.search(r"^##+[ \t]+\[?[0-9]+\.[0-9]+\.[0-9]+\]?[^\n]*$", text, re.M)
+if m:
+    if mode == "read":
+        print(ver.search(m.group(0)).group(0))
+    else:
+        head = ver.sub(newv, m.group(0), count=1)
+        write_atomic(text[:m.start()] + head + text[m.end():])
+        print("  heading -> %s" % head.splitlines()[0])
+    sys.exit(0)
+# 3) legacy plain prose: the first version token anywhere
+m = ver.search(text)
+if mode == "read":
+    if m:
+        print(m.group(0))
+    sys.exit(0)
+if not m:
+    sys.exit("✖ %s holds no version to replace" % path)
+write_atomic(text[:m.start()] + newv + text[m.end():])
+print("  first version -> %s" % newv)
+PY
+}
+
+extra_surface() {  # extra_surface <top> <surfaces-json> read|write [new-version]
+  # The ONE resolver for extra_version_surfaces, shared by version_gate (read) and bump_versions
+  # (write) — the roadmap_target lesson: two implementations drift (waypoint
+  # rtc-ship-extra-version-surfaces). 1.4.2 shipped the resolver inline; 1.5.0 moves it into
+  # bin/rtc_version_surface.py (a standalone CLI the tests can call directly) and strengthens it:
+  # json with an explicit "key" targets that dotted path depth-aware (a nested decoy with the same
+  # key is never touched); without a key the FIRST "version" field in document order wins (the
+  # 1.4.2 contract, kept); toml-package stays scoped to the [package] table; cargo-lock REFUSES a
+  # crate duplicated across [[package]] blocks instead of silently picking one; writes validate
+  # every surface BEFORE writing any (a broken third surface cannot leave a half-bump) and
+  # re-extract as a post-write check. Same argv contract, same "path<TAB>version" reads, same
+  # empty-extraction-is-failure rule. Argument order is translated: the function takes
+  # <top> <surfaces> read|write [new], the script takes <mode> <top> <surfaces> [new].
+  local top=$1 surfaces=$2 mode=$3
+  if [ "$mode" = write ]; then
+    python3 "$RTC_SHIP_DIR/rtc_version_surface.py" write "$top" "$surfaces" "$4"
+  else
+    python3 "$RTC_SHIP_DIR/rtc_version_surface.py" read "$top" "$surfaces"
+  fi
+}
+
+bump_versions() {  # bump_versions <version> — rewrite EXACTLY the surfaces rtc-ship.json declares
+  # Split from the check on 2026-10-31 (waypoint rtc-ship-sh-split-the-version): --versions-only
+  # verifies and writes nothing; this action writes. Hand-bumping N surfaces is the drift the gate
+  # exists to prevent — the 0.49.3 handoff even assumed --versions-only bumps.
+  local v=$1 top manifest changelog vfile roadmap
+  top=$(resolve_top)
+  manifest=$(cfg_get "manifest" ".claude-plugin/plugin.json")
+  changelog=$(cfg_get "changelog" "CHANGELOG.md")
+  vfile=$(cfg_get "version_file" "")
+  roadmap=$(cfg_get "roadmap" "")
+  python3 - "$top" "$manifest" "$changelog" "$vfile" "$v" <<'PY' || return 1
+import datetime, os, re, sys
+top, manifest, changelog, vfile, v = sys.argv[1:6]
+
+def write_atomic(path, data):
+    # tmp + os.replace: a crash mid-write must not truncate the surface (council review
+    # 2026-10-31 caught the direct open(...,"w") truncating on failure)
+    tmp = path + ".bump-tmp"
+    with open(tmp, "w") as fh:
+        fh.write(data)
+    os.replace(tmp, path)
+
+# manifest: first "version" field only, indent preserved — a full json round-trip would reformat
+# the whole file and bury the bump in a whitespace diff.
+mp = os.path.join(top, manifest)
+lines = open(mp).read().splitlines(keepends=True)
+out, done = [], False
+for ln in lines:
+    if not done and '"version"' in ln:
+        ln = re.sub(r'("version"\s*:\s*")[^"]*(")', r'\g<1>' + v + r'\g<2>', ln, count=1)
+        done = True
+    out.append(ln)
+if not done:
+    sys.exit('✖ no "version" field in ' + mp)
+write_atomic(mp, "".join(out))
+print("  %s -> %s" % (manifest, v))
+# changelog: a NEW top entry in the file's own heading style (version, bracket, and date all
+# inherited from the current top VERSIONED heading), unless an entry for v already exists
+# (idempotent). The style source must be a VERSIONED heading — with `## [Unreleased]` on top
+# the old `^##+\s.*$` match copied the word "Unreleased" and produced a versionless entry.
+cp = os.path.join(top, changelog) if changelog else ""
+if cp and os.path.exists(cp):
+    text = open(cp).read()
+    if not re.search(r'^#+\s+\[?' + re.escape(v) + r'\]?(\s|$)', text, re.M):
+        m = re.search(r'^##+\s+\[?[0-9]+\.[0-9]+\.[0-9]+\]?[^\n]*$', text, re.M)
+        if m:
+            # Insert directly above the previous release entry — correct whether or
+            # not a title/comment block precedes it (the old re.M title search matched
+            # ANY '#' line and could insert mid-file).
+            newhead = re.sub(r'[0-9]+\.[0-9]+\.[0-9]+', v, m.group(0), count=1)
+            newhead = re.sub(r'20\d\d-\d\d-\d\d', datetime.date.today().isoformat(), newhead)
+            entry = newhead + "\n\n- (release notes go here)\n"
+            pos = m.start()
+        else:
+            # First release: no versioned heading yet — insert after the leading
+            # title/comment block (never at an arbitrary mid-file '#' line). The title
+            # match must be a REAL H1 — `#[^#]` — so a `## [0.50.1]`-style heading can
+            # never be swallowed into the lead block and the entry land AFTER it
+            # (waypoint run-to-completion-bump).
+            newhead = "## [%s] — %s" % (v, datetime.date.today().isoformat())
+            entry = newhead + "\n\n- (release notes go here)\n"
+            lead = re.match(r'(?:[ \t]*\n|#[^#\n][^\n]*\n|<!--[\s\S]*?-->[^\n]*\n)+', text)
+            pos = lead.end() if lead else 0
+        write_atomic(cp, text[:pos] + entry + ("\n" if pos else "") + text[pos:])
+        print("  %s -> new top entry: %s" % (changelog, newhead))
+    else:
+        print("  %s already has a %s entry — not duplicated" % (changelog, v))
+# version_file: declared -> write (create if absent; the gate fails on declared-but-absent)
+if vfile:
+    write_atomic(os.path.join(top, vfile), v + "\n")
+    print("  %s -> %s" % (vfile, v))
+PY
+  # roadmap through the ONE shared resolver — the gate reads the very same target, so the
+  # two can never disagree again (waypoint run-to-completion-bump).
+  if [ -n "$roadmap" ] && [ -e "$top/$roadmap" ]; then
+    roadmap_target "$top/$roadmap" write "$v" || return 1
+  fi
+  # extra_version_surfaces through the ONE shared resolver as well — bump and gate must read and
+  # write the same targets (waypoint rtc-ship-extra-version-surfaces).
+  local extras
+  extras=$(cfg_get_raw "extra_version_surfaces" "")
+  if [ -n "$extras" ] && [ "$extras" != '""' ]; then
+    extra_surface "$top" "$extras" write "$v" || return 1
+  fi
+}
+
+version_gate() {
+  # THE SAME resolver cfg_get uses, and for the same reason: an installed plugin cache is a plain
+  # directory with no .git anywhere above it, and so is an extracted release tarball. Letting `git
+  # rev-parse` fail left `top` EMPTY, so every surface was read through "/" and came back "<none>"
+  # — a consistent tree reported as disagreeing. Found by dogfooding installed 0.6.6.
+  local top; top=$(resolve_top)
+  if [ -x "$top/tests/test_version_consistency.sh" ]; then
+    if ! bash "$top/tests/test_version_consistency.sh"; then
+      echo "✖ version surfaces disagree (the repo's own test) — ship refused" >&2; return 1
+    fi
+    return 0
+  fi
+  # No repo test: check what the config declares. A repo that declares fewer surfaces than it has
+  # will drift, but a repo that declares NONE gets a manifest+changelog check rather than nothing.
+  local manifest changelog vfile roadmap want mv cv vv rv
+  manifest=$(cfg_get "manifest" ".claude-plugin/plugin.json")
+  changelog=$(cfg_get "changelog" "CHANGELOG.md")
+  vfile=$(cfg_get "version_file" "")
+  roadmap=$(cfg_get "roadmap" "")
+  mv=$(python3 -c "import json,sys;print(json.load(open('$top/$manifest')).get('version',''))" 2>/dev/null || echo "")
+  # BOTH heading styles: Keep-a-Changelog permits `## 1.2.3` and `## [1.2.3]`, and this repo's own
+  # CHANGELOG uses the unbracketed form while free-agents' uses brackets.
+  cv=$(sed -n -E 's/^##+[[:space:]]+\[?([0-9]+\.[0-9]+\.[0-9]+)\]?.*/\1/p' "$top/$changelog" 2>/dev/null | head -1)
+  vv=""; [ -n "$vfile" ] && [ -f "$top/$vfile" ] && vv=$(tr -d '[:space:]' < "$top/$vfile")
+  # The roadmap surface resolves through the SAME helper the bump writes with — 'Current
+  # released version' section first, then first versioned heading, then first token — two
+  # separate implementations drifted apart on free-agents 0.50.2 (waypoint
+  # run-to-completion-bump).
+  rv=""; [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && rv=$(roadmap_target "$top/$roadmap" read)
+  echo "  $manifest : ${mv:-<none>}"
+  echo "  $changelog (top entry) : ${cv:-<none>}"
+  [ -n "$vfile" ] && echo "  $vfile : ${vv:-<none>}"
+  [ -n "$roadmap" ] && echo "  $roadmap : ${rv:-<none>}"
+  local bad=0
+  # An EMPTY extraction is a FAILURE, never a pass. A gate that cannot find its input and then
+  # declares success is worse than no gate — it let a planted split through on the first run of
+  # this script, because an unreadable changelog silently skipped its comparison.
+  if [ -z "$mv" ]; then echo "✖ no version in $manifest" >&2; bad=1; fi
+  if [ -z "$changelog" ]; then
+    # A repo may legitimately have no changelog at all (echoprism: package.json, no CHANGELOG.md).
+    # Saying so beats failing on a file that was never promised.
+    echo "  (no changelog declared — not checked)"
+    cv=$mv
+  elif [ -z "$cv" ]; then echo "✖ no numbered heading found in $changelog" >&2; bad=1
+  elif [ "$cv" != "$mv" ]; then echo "✖ changelog top is $cv, manifest says $mv" >&2; bad=1; fi
+  # A DECLARED surface that yields no version fails like the manifest and changelog do — the same
+  # empty-extraction rule, which these two used to skip (2026-10-25 review).
+  if [ -n "$vfile" ] && [ ! -f "$top/$vfile" ]; then echo "✖ $vfile is declared in the config but absent" >&2; bad=1
+  elif [ -n "$vfile" ] && [ -z "$vv" ]; then echo "✖ $vfile is declared but holds no version" >&2; bad=1
+  elif [ -n "$vv" ] && [ "$vv" != "$mv" ]; then echo "✖ $vfile says $vv, manifest says $mv" >&2; bad=1; fi
+  if [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && [ -z "$rv" ]; then
+    echo "✖ $roadmap is declared but holds no version" >&2; bad=1
+  elif [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && [ "$rv" != "$mv" ]; then
+    echo "✖ $roadmap says $rv, manifest says $mv" >&2; bad=1
+  fi
+  # extra_version_surfaces read through the SAME resolver the bump writes with; a declared
+  # surface that is absent or yields no version fails like every other surface.
+  local extras ex_out ep ev
+  extras=$(cfg_get_raw "extra_version_surfaces" "")
+  if [ -n "$extras" ] && [ "$extras" != '""' ]; then
+    if ex_out=$(extra_surface "$top" "$extras" read); then
+      while IFS=$'\t' read -r ep ev; do
+        [ -n "$ep" ] || continue
+        echo "  $ep : ${ev:-<none>}"
+        if [ -z "$ev" ]; then echo "✖ $ep is declared but holds no version" >&2; bad=1
+        elif [ "$ev" != "$mv" ]; then echo "✖ $ep says $ev, manifest says $mv" >&2; bad=1; fi
+      done <<<"$ex_out"
+    else
+      echo "✖ extra_version_surfaces could not be read (declared surfaces must exist)" >&2; bad=1
+    fi
+  fi
+  return "$bad"
+}
+
+# ----------------------------------------------------------------------------------------------
+# The suite gates: parallel pytest, plus a tree stamp so a tree that already passed is not re-run.
+# A repo's own extra gates go in .rtc/pre-flight.sh (free-agents' litellm/picker venvs, say).
+# ----------------------------------------------------------------------------------------------
+
+worktree_tree() {  # the tree id of what the suites will actually read: the WORKING tree
+  # Keyed on HEAD^{tree}, uncommitted edits rode on an earlier stamp and --test-only skipped them
+  # (measured 2026-10-27). Hash the working tree into a TEMPORARY index (seeded from the real one
+  # for git's stat cache) so the real index is never touched. A clean tree hashes to HEAD^{tree},
+  # so the ship path's stamp lookup is unchanged; ignored files are, rightly, not part of the key.
+  local idx id rc
+  idx=$(mktemp) || return 1
+  rm -f "$idx"; cp "$(git rev-parse --git-path index)" "$idx" 2>/dev/null || :
+  id=$(GIT_INDEX_FILE=$idx git add -A -- ':/' 2>/dev/null && GIT_INDEX_FILE=$idx git write-tree); rc=$?
+  rm -f "$idx"
+  [ "$rc" = 0 ] && [ -n "$id" ] || return 1
+  printf '%s\n' "$id"
+}
+
+gates() {
+  local tree stamp d rc=0 pids=() names=() out
+  local stall_seen=0 wrc failed_label="" failed_log="" stalls_recovered=""
+  tree=$(worktree_tree) || { echo "✖ could not hash the working tree for the test stamp" >&2; return 1; }
+  stamp="$(git rev-parse --git-common-dir)/rtc-tested/$tree"
+  if [ -e "$stamp" ]; then
+    phase "tests: tree ${tree:0:10} already passed every gate ($(date -r "$stamp" '+%H:%M')) — skipped"
+    return 0
+  fi
+  # The stall window is resolved BEFORE anything launches: a SET but invalid override aborts here
+  # (naming its source) as a CONFIG error — exit 2 at every caller, matching the header vocabulary —
+  # never after its gate command is already running, which would orphan the command this function
+  # is about to supervise.
+  stall_seconds >/dev/null || return 2
+  # The retry count is resolved at the same door: a SET but invalid value is a CONFIG error —
+  # return 2 (exit 2 at every caller) before any gate launches, never a silent default.
+  stall_retries >/dev/null || return 2
+  # Worker count: env, then rtc-ship.json's test_workers, then 12. The config key was documented
+  # and never read (2026-10-27) — a SET but invalid value now aborts rather than falling through.
+  local workers src
+  if [ -n "${RTC_TEST_WORKERS:-}" ]; then workers=$RTC_TEST_WORKERS; src=RTC_TEST_WORKERS
+  else workers=$(cfg_get "test_workers" "12"); src="rtc-ship.json test_workers"; fi
+  case "$workers" in
+    ''|*[!0-9]*|0) echo "✖ $src must be a positive integer, got '$workers'" >&2; return 2 ;;
+  esac
+  d=$(mktemp -d)
+  # Pre-flight runs ALONGSIDE the main suite, not before it: its suites are the ones the main
+  # collection skips (a second venv's), so the two are disjoint, and serially every ship waited
+  # ~2 minutes for it. Its output goes to a log and is shown when it fails.
+  local pf_pid=""
+  if [ -x .rtc/pre-flight.sh ]; then
+    timeout_vs_stall_warn "pre-flight gates" "$(cat .rtc/pre-flight.sh)"
+    ./.rtc/pre-flight.sh </dev/null >"$d/pre-flight" 2>&1 &
+    pf_pid=$!
+  fi
+  # How this repo's tests run is the REPO'S business, not the tool's assumption. A pytest suite is
+  # the default, but a repo of shell suites would otherwise collect nothing and exit 5 — so the
+  # command comes from the config, and an UNCOLLECTED suite is a failure, never a silent pass.
+  local test_cmd; test_cmd=$(cfg_get "test_cmd" "")
+  if [ -n "$test_cmd" ]; then
+    timeout_vs_stall_warn "tests (config)" "$test_cmd"
+    gate_once "tests (config)" "$d/main" "$test_cmd" || return 2
+    wrc=$GATE_RC
+    if [ "$GATE_RECOVERED" = 1 ]; then
+      stalls_recovered="$stalls_recovered tests (config)"
+      phase "tests (config): pass (after one recovered stall)"
+    elif [ "$wrc" = 0 ]; then phase "tests (config): pass"
+    elif [ "$wrc" = 124 ]; then
+      rc=1; stall_seen=1; failed_label="tests (config)"; failed_log="$d/main"
+      phase "✖ tests (config) STALLED — diagnosis in $d/main.stall"
+    else
+      rc=1; failed_label="tests (config)"; failed_log="$d/main"
+      phase "✖ tests (config) FAILED"; grep -E "FAIL|✖" "$d/main" | head -10 >&2
+    fi
+  else
+    # pytest where it is installed: the pipx location first (where this machine's lives), then PATH,
+    # then the active interpreter's module. Never a single hardcoded path (2026-10-25 review).
+    local pyt=() pcmd
+    if [ -x "$HOME/.local/bin/pytest" ]; then pyt=("$HOME/.local/bin/pytest")
+    elif command -v pytest >/dev/null 2>&1; then pyt=(pytest)
+    else pyt=(python3 -m pytest); fi
+    pcmd=$(printf '%q ' "${pyt[@]}")"-q tests -p no:cacheprovider -n $workers"
+    names+=(main); pids+=(launch)
+  fi
+  local i
+  for i in "${!pids[@]}"; do
+    # watch_gate waits FIRST, so the log is complete before it is classified; a stall is named
+    # here and resolved to rc 124 at gates()' exit, an ordinary failure classifies as before.
+    # gate_once adds the single automatic retry of a STALLED gate (stall_retries).
+    gate_once "pytest ${names[$i]}" "$d/${names[$i]}" "$pcmd" || return 2
+    wrc=$GATE_RC
+    if [ "$GATE_RECOVERED" = 1 ]; then
+      stalls_recovered="$stalls_recovered pytest ${names[$i]}"
+      phase "pytest ${names[$i]}: pass (after one recovered stall)"
+    elif [ "$wrc" = 124 ]; then
+      rc=1; stall_seen=1; failed_label="pytest ${names[$i]}"; failed_log="$d/${names[$i]}"
+      phase "✖ pytest ${names[$i]} STALLED — diagnosis in $d/${names[$i]}.stall"
+    elif [ "$wrc" != 0 ]; then
+      rc=1; failed_label="pytest ${names[$i]}"; failed_log="$d/${names[$i]}"
+      phase "✖ pytest ${names[$i]} FAILED: $(grep -E 'passed|failed|error' "$d/${names[$i]}" | tail -1)"
+      grep -E '^(FAILED|ERROR) ' "$d/${names[$i]}" | head -10 >&2
+    elif grep -q "no tests ran" "$d/${names[$i]}"; then
+      rc=1; phase "✖ pytest ${names[$i]} collected NO tests — declare a test_cmd in rtc-ship.json"
+    else
+      phase "pytest ${names[$i]}: $(grep -E 'passed|failed' "$d/${names[$i]}" | tail -1)"
+    fi
+  done
+  if [ -n "$pf_pid" ]; then
+    local retries
+    retries=$(stall_retries) || return 2
+    watch_maybe_retry "pre-flight gates" "$d/pre-flight" "./.rtc/pre-flight.sh" "$pf_pid" "$retries"
+    wrc=$GATE_RC
+    if [ "$GATE_RECOVERED" = 1 ]; then
+      stalls_recovered="$stalls_recovered pre-flight gates"
+      phase "pre-flight gates: pass (after one recovered stall)"
+    elif [ "$wrc" = 124 ]; then
+      rc=1; stall_seen=1; failed_label="pre-flight gates"; failed_log="$d/pre-flight"
+      phase "✖ pre-flight gates STALLED — diagnosis in $d/pre-flight.stall"
+    elif [ "$wrc" = 0 ]; then phase "pre-flight gates: pass"
+    else rc=1; failed_label="pre-flight gates"; failed_log="$d/pre-flight"
+         phase "✖ pre-flight gates FAILED"; tail -30 "$d/pre-flight" >&2; fi
+  fi
+  # A recovered stall is recorded LOUDLY at the end of the run too — never let a retry hide a
+  # real deadlock: the .attempt1.stall reports stay next to the gate logs.
+  if [ -n "$stalls_recovered" ]; then
+    phase "⚠ recovered stalls this run:$stalls_recovered — read the .attempt1.stall reports"
+  fi
+  # RTC_BASELINE=1: diagnosis only — re-run the failed gate on origin/<default> and label its
+  # failed lines branch-only vs pre-existing. Never changes rc.
+  if [ "$rc" != 0 ] && [ "${RTC_BASELINE:-0}" = 1 ] && [ -n "$failed_label" ]; then
+    baseline_classify "$failed_label" "$failed_log"
+  fi
+  # Stamp only the tree that was tested: an edit DURING the run means neither the tree the suites
+  # started on nor the one now on disk is proven green.
+  if [ "$rc" = 0 ] && [ "$(worktree_tree)" != "$tree" ]; then
+    phase "tests passed, but the working tree changed during the run — NOT stamped; rerun to cache it"
+    if [ -n "$stalls_recovered" ]; then
+      # Same dangling-promise rule as the recovered-green branch below: the run's own output named
+      # <log>.attempt1.stall, so keep $d even though the tree is not stamped.
+      phase "⚠ recovered-stall artefacts kept in $d (tree changed mid-run; not stamped)"
+    else
+      rm -rf "$d"
+    fi
+  elif [ "$rc" = 0 ] && [ -n "$stalls_recovered" ]; then
+    # Green WITH a recovered stall: the tree IS stamped, but the first attempt's artefacts stay
+    # on disk — the recovered line promised a diagnosis in <log>.attempt1.stall, and cleaning $d
+    # here would turn that promise into a dangling path.
+    mkdir -p "$(dirname "$stamp")"; touch "$stamp"
+    phase "⚠ recovered-stall artefacts kept in $d (not cleaned up: the run was green)"
+  elif [ "$rc" = 0 ]; then mkdir -p "$(dirname "$stamp")"; touch "$stamp"; rm -rf "$d"
+  else echo "✖ tests failed — full logs kept in $d" >&2; fi
+  # A stall is the more urgent failure: 124 (the timeout(1) convention) whenever ANY gate stalled,
+  # over an ordinary 1 — resolved at this single exit so no later failure site can clobber it.
+  if [ "$rc" != 0 ] && [ "$stall_seen" = 1 ]; then rc=124; fi
+  return "$rc"
+}
+
+hook() {  # hook <name> — run a repo hook if it is present and executable
+  local name=$1
+  if [ -x ".rtc/$name" ]; then
+    if "./.rtc/$name"; then phase "hook $name: pass"; return 0
+    else phase "✖ hook $name FAILED"; return 1; fi
+  fi
+  return 0
+}
+
+# --- what a worktree may be reaped without losing anything -----------------------------------
+# Harmonised with watch-your-step's worktree-remove guard (bin/watch-your-step.py on branch
+# fix/block-worktree-remove-ignored: CACHE_DIRS, _is_cache_path, _dir_is_all_cache). The general
+# rules are deliberately DUPLICATED rather than shared: these two repos have no dependency on each
+# other, and this routine is the AUTOMATIC one. A reaper that leans on a guard written for manual
+# commands has its safety installed by luck — it would be safe only while watch-your-step happens
+# to be installed. So this decides on its own, and the shared rules are pinned by the tests below.
+#   - .DS_Store and *.pyc are noise anywhere;
+#   - a path is excused by a DIRECTORY component: `venv/x` is cache, `myvenv/plan.md` is NOT — a
+#     substring match would excuse `myvenv/` too, which is exactly the second half of the trap;
+#   - git COLLAPSES a wholly-ignored directory to `sub/`, so the name alone cannot separate a
+#     Finder-junk directory from a ledger holding the only copy of something. A collapsed dir is
+#     therefore INSPECTED, never judged by its name (unless its name is itself a cache dir).
+#   - an ignored file byte-identical to the same path in the canonical checkout is not information
+#     this worktree alone holds. This generalises fa-ship.sh's config.local.sh special case, which
+#     had to be dropped on porting: hardcoding one repo's path would have left every other repo
+#     looking protected while protecting nothing.
+CACHE_DIRS="__pycache__ .pytest_cache .ruff_cache .mypy_cache .venv venv node_modules dist build"
+
+cleanup_is_cache() {  # cleanup_is_cache <relpath> — noise a reaper may drop without a backup?
+  local p=$1 base rest part
+  base=${p##*/}
+  case "$base" in .DS_Store|*.pyc) return 0 ;; esac
+  rest=${p%/*}
+  [ "$rest" = "$p" ] && return 1   # a bare filename: no directory component can excuse it
+  while [ -n "$rest" ]; do
+    part=${rest%%/*}
+    case " $CACHE_DIRS " in *" $part "*) return 0 ;; esac
+    [ "$part" = "$rest" ] && break
+    rest=${rest#*/}
+  done
+  return 1
+}
+
+cleanup_identical_to_main() {  # does $MAIN already hold this exact file, byte for byte?
+  [ -f "$1" ] && [ -f "$MAIN/${1#"$WT"/}" ] && cmp -s "$1" "$MAIN/${1#"$WT"/}"
+}
+
+cleanup_collapsed() {  # print the PRECIOUS files inside a git-collapsed ignored directory
+  local p=$1 prefix=${1%/} d rel
+  d="$WT/$prefix"
+  [ -d "$d" ] || return 0
+  # Files and symlinks only: an empty directory and one holding nothing but subdirectories of
+  # noise both lose nothing, and `find -type d` would name them as if they did.
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    cleanup_is_cache "$prefix/$rel" && continue
+    cleanup_identical_to_main "$d/$rel" && continue
+    printf '%s\n' "$prefix/$rel"
+  done < <(cd "$d" 2>/dev/null && find . -mindepth 1 \( -type f -o -type l \) 2>/dev/null | sed 's|^\./||')
+}
+
+cleanup_extra() {  # print one RELATIVE path per line for everything a reaper would destroy that is
+                   # NOT noise. EMPTY output = reap without a backup. A non-zero EXIT = "cannot
+                   # tell", which the caller must refuse to read as "safe".
+  local p
+  # pipefail is load-bearing here: a `git status` that fails makes this whole function fail, so the
+  # caller keeps the worktree instead of guessing that nothing precious was in it.
+  # NOT --untracked-files=all: with it git names ignored files individually and the COLLAPSED
+  # '!! sub/' form never appears — which made cleanup_collapsed dead code and let both halves of the
+  # trap pass without the inspection ever running (measured: mutating cleanup_collapsed into an
+  # immediate `return 0` left every test green). Without -uall git collapses a wholly-ignored
+  # directory, that is the form inspection actually judges, and the ship's own dirty check has
+  # already refused a worktree holding untracked files, so nothing untracked can reach here anyway.
+  # quotePath=false: with the default git C-quotes a non-ASCII name ('!! "caf\303\251.local.md"'),
+  # the backup loop's -e test then fails on the quoted literal, and a mere skip would let
+  # `worktree remove --force` destroy the only copy (measured 2026-10-28). Bytes <0x20 and '"'/'\\'
+  # stay quoted even with quotePath=false — those hit the cannot-tell rule in cleanup() below.
+  git -C "$WT" -c core.quotePath=false status --porcelain --ignored 2>/dev/null \
+    | sed -n -e 's/^!! //p' -e 's/^?? //p' \
+    | while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        case "$p" in
+          */) cleanup_collapsed "$p" ;;
+          *)  if cleanup_is_cache "$p"; then continue; fi
+              if cleanup_identical_to_main "$WT/$p"; then continue; fi
+              printf '%s\n' "$p" ;;
+        esac
+      done
+}
+
+cleanup() {  # after a CONFIRMED release: reap the shipped worktree, its branch, and every branch
+             # whose content is already on the default branch. Ported from fa-ship.sh, whose
+             # routine has run in production since 2026-10-23; the CHANGELOG has advertised this
+             # step since 0.7.0 and the generalization silently dropped it.
+  local upstream="origin/$DEFAULT_BRANCH" in_wt b r extra bk list rel bk_ok n=0
+  # Never the canonical checkout: a ship must not delete the tree every other worktree is measured
+  # against. (Shipping $MAIN itself is a caller error; refusing is cheaper than recovering.)
+  if [ "$WT" = "$MAIN" ]; then
+    echo "⚠ cleanup: $WT is the canonical checkout — not touched" >&2
+    return 0
+  fi
+  git fetch -q --prune origin
+  in_wt=$(git worktree list --porcelain | sed -n 's#^branch refs/heads/##p')
+  # The shipped worktree itself, only when its branch is fully merged AND the tree is clean. A
+  # dirty or unmerged worktree is kept, and says so — never removed silently.
+  if ! extra=$(cleanup_extra); then
+    echo "⚠ cleanup: kept $WT (could not tell what it would lose)" >&2
+  elif ! git merge-base --is-ancestor "$BR" "$upstream"; then
+    echo "⚠ cleanup: kept $WT ($BR is not merged into $upstream)" >&2
+  elif [ -n "$(git -C "$WT" status --porcelain)" ]; then
+    echo "⚠ cleanup: kept $WT (the tree is dirty)" >&2
+  elif [ -z "$extra" ]; then
+    git worktree remove --force "$WT" && git branch -q -D "$BR" \
+      && phase "cleanup: removed worktree $WT and branch $BR"
+    if git ls-remote --exit-code --heads origin "$BR" >/dev/null 2>&1; then
+      git push -q origin --delete "$BR" && phase "cleanup: deleted origin/$BR"
+    fi
+  else
+    # Deletion is allowed ONLY after a timestamped backup of every uncommitted file that would be
+    # lost. Measured 2026-10-24: a removed worktree once took an uncommitted handover with it, so
+    # the routine must not lose data even where a human might have run --force.
+    # EVERY step of the backup is checked by hand: this function runs as `cleanup || …`, and bash
+    # switches set -e OFF for the whole body of a function called on the left of `||`. Unchecked, a
+    # failed mkdir/cp printed "backed up" and went on to `worktree remove --force` — measured
+    # 2026-10-28 (rehearsal p7): the only copy of an ignored file was destroyed.
+    bk="${RTC_BACKUP_DIR:-$HOME/.claude/backups/worktrees}/$(basename "$WT")-$(date +%Y%m%d-%H%M%S)"
+    list=$extra
+    bk_ok=1
+    mkdir -p "$bk" 2>/dev/null || bk_ok=0
+    if [ "$bk_ok" = 1 ]; then
+      while IFS= read -r rel; do
+        [ -n "$rel" ] || continue
+        # A LISTED path that does not exist is "cannot tell", never "skip": a name git still
+        # C-quotes (control chars survive quotePath=false) fails this -e test on the quoted
+        # literal, and a skip would let the remove below destroy the only copy (measured
+        # 2026-10-28, rehearsal p7). Keep the worktree instead.
+        [ -e "$WT/$rel" ] || [ -L "$WT/$rel" ] || { bk_ok=0; break; }
+        { mkdir -p "$bk/$(dirname "$rel")" && cp -R "$WT/$rel" "$bk/$rel"; } 2>/dev/null \
+          || { bk_ok=0; break; }
+        n=$((n + 1))
+      done <<< "$list"
+    fi
+    if [ "$bk_ok" = 0 ]; then
+      echo "⚠ cleanup: kept $WT (backup failed, or a listed file was missing — cannot tell what removal would lose); nothing was removed" >&2
+    else
+      # Count COPIED files, not listed lines: the log once reported the listed count after a
+      # skipped copy, so "backed up N" could name files the backup never held.
+      phase "cleanup: backed up $n file(s) to $bk"
+      git worktree remove --force "$WT" && git branch -q -D "$BR" \
+        && phase "cleanup: removed worktree $WT (backed up first)"
+      if git ls-remote --exit-code --heads origin "$BR" >/dev/null 2>&1; then
+        git push -q origin --delete "$BR" && phase "cleanup: deleted origin/$BR"
+      fi
+    fi
+  fi
+  # Every OTHER local branch already on the default branch, except one a worktree still has
+  # checked out — a concurrent session may be standing in it.
+  # MERGEDNESS IS DECIDED HERE, against origin, never by `git branch -d`: -d judges against the
+  # branch's upstream, else the CURRENT HEAD of the canonical checkout, and since 1.0.0 that checkout
+  # may be on any branch (the AROUND route). -d then refused the just-shipped branch and left it
+  # behind (found 2026-10-31). So: --merged "$upstream" plus an explicit ancestry check, then -D.
+  # On the AROUND route the default branch is checked out nowhere, so the $DEFAULT_BRANCH skips in
+  # both loops below are LOAD-BEARING and pinned (tests/test_ship_any_checkout.sh, case a): without
+  # them this sweep deletes the local default branch and pushes --delete of origin's.
+  for b in $(git for-each-ref --merged "$upstream" --format='%(refname:short)' refs/heads); do
+    [ "$b" = "$DEFAULT_BRANCH" ] && continue
+    printf '%s\n' "$in_wt" | grep -qx "$b" && continue
+    git merge-base --is-ancestor "$b" "$upstream" || continue
+    git branch -q -D "$b" && phase "cleanup: deleted merged branch $b"
+  done
+  # And the same for the remote-tracking refs: a merged topic branch left on origin is clutter that
+  # `git fetch --prune` will not clean, because it was never deleted there. Here the in_wt test IS
+  # load-bearing and IS tested (u3): `git push --delete` knows nothing about local worktrees. The
+  # $DEFAULT_BRANCH test is load-bearing too (see above) and pinned.
+  for r in $(git for-each-ref --merged "$upstream" --format='%(refname:lstrip=3)' refs/remotes/origin); do
+    case "$r" in "$DEFAULT_BRANCH"|HEAD) continue ;; esac
+    printf '%s\n' "$in_wt" | grep -qx "$r" && continue
+    git push -q origin --delete "$r" && phase "cleanup: deleted merged origin/$r"
+  done
+  return 0
+}
+
+# --no-reap may appear in ANY position: pull it out before the dispatch so the flag composes
+# with every invocation shape. Transient only — it skips cleanup for THIS ship; the permanent
+# opt-out is rtc-ship.json's "reap": false, and the environment's RTC_SKIP_CLEANUP=1 (which
+# predates the flag and which scripts already set) still applies on its own.
+no_reap_seen=0
+args=()
+for a in "$@"; do
+  case $a in
+    --no-reap) no_reap_seen=1 ;;
+    *) args+=("$a") ;;
+  esac
+done
+set -- ${args[@]+"${args[@]}"}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+  "") usage >&2; exit 2 ;;
+  --test-only) ;;
+  --versions-only) ;;
+  --check-versions) ;;
+  --bump-versions) ;;
+  --which-config)
+    ensure_defaults_template
+    validate_defaults_template
+    git rev-parse --show-toplevel
+    cfg_get "tag_prefix" "(none)"
+    echo "default_branch: $(resolve_default_branch "$(git rev-parse --show-toplevel)")"
+    extras=$(cfg_get_raw "extra_version_surfaces" "")
+    if [ -n "$extras" ] && [ "$extras" != '""' ]; then
+      echo "extra_version_surfaces: $extras"
+    fi
+    echo "policy keys (repo value wins; template: user-level defaults):"
+    cfg_resolve table
+    exit 0 ;;
+  -*) echo "rtc-ship.sh: unrecognised option $1" >&2; usage >&2; exit 2 ;;
+esac
+
+if [ "$1" = --test-only ]; then
+  [ $# -eq 2 ] || { usage >&2; exit 2; }
+  cd "$2"
+  # FAIL, do not warn. A gate that reports a mismatch and exits 0 trains the operator to believe
+  # the ground is covered — that is exactly how a decorative check survives.
+  if ! version_gate; then echo "✖ version surfaces disagree — see above. Ship will refuse." >&2; exit 1; fi
+  gates; exit $?
+fi
+if [ "$1" = --bump-versions ]; then
+  [ $# -eq 3 ] || { usage >&2; exit 2; }
+  cd "$2"
+  V=$3
+  if ! printf '%s' "$V" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    echo "✖ version '$V' is not a plain X.Y.Z — nothing written" >&2; usage >&2; exit 2
+  fi
+  bump_versions "$V" || { echo "✖ bump failed — fix the surface above and re-run" >&2; exit 1; }
+  if ! version_gate; then echo "✖ version surfaces still disagree after the bump" >&2; exit 1; fi
+  phase "bumped to $V — all declared surfaces agree"; exit 0
+fi
+if [ "$1" = --versions-only ] || [ "$1" = --check-versions ]; then
+  [ $# -eq 2 ] || { usage >&2; exit 2; }
+  cd "$2"
+  # The version gate ALONE — fast enough to run before every commit, and the only part a
+  # hand-rolled ship reliably skips. CHECK-ONLY: writes nothing (pinned by test_rtc_ship.sh).
+  if ! version_gate; then echo "✖ version surfaces disagree" >&2; exit 1; fi
+  phase "version surfaces agree"; exit 0
+fi
+[ $# -eq 3 ] || { usage >&2; exit 2; }
+
+WT=$1 V=$2 TITLE=$3
+# --- the door: the ship target must be a LINKED worktree ---------------------------------------
+# Shipping a canonical checkout fails its git steps and dies mid-loop (or, in the shape this
+# guards against originally, exited 0 having shipped nothing — summon-skills, 2026-11-11, caught
+# only by ls-remote): the rebase has already run in the target by the time the first git step
+# fails. The check is repo IDENTITY, not path spelling — --git-dir equals --git-common-dir exactly
+# when this checkout IS the repo's primary checkout — so a symlink or a trailing slash to the
+# canonical checkout is refused the same way. The read-only modes (--test-only, --versions-only,
+# --bump-versions) return above and never reach this.
+door_refuse() { echo "✖ $WT is not inside a git work tree" >&2; exit 2; }
+cd "$WT" 2>/dev/null || door_refuse
+WT=$(pwd)
+[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ] || door_refuse
+gd=$(git rev-parse --absolute-git-dir 2>/dev/null) || door_refuse
+cgd=$(git rev-parse --git-common-dir 2>/dev/null) || door_refuse
+cgd=$(cd "$cgd" 2>/dev/null && pwd -P) || door_refuse
+if [ "$gd" = "$cgd" ]; then
+  echo "✖ $WT is the canonical checkout — run the ship from a linked worktree:" \
+       "git worktree add -b <branch> <dir> origin/<default>" >&2
+  exit 2
+fi
+# The user-level defaults template is ensured (created + announced on first use) and validated
+# HERE — after the door, before the first cfg_get consults it: a template carrying repo-specific
+# keys must fail the ship at the door, not surface as a mystery value mid-loop.
+ensure_defaults_template
+validate_defaults_template
+# -z, not -n: `[ -n "$out" ] || { dirty }` declares a CLEAN tree dirty and refuses every valid ship.
+[ -z "$(git status --porcelain)" ] || { echo "✖ $WT is dirty" >&2; exit 1; }
+BR=$(git branch --show-current)
+# 1.4.2: a worktree left on a DETACHED HEAD (what a finished `git rebase` leaves behind when the
+# branch was not checked out) made BR empty, and the merge then died mid-loop with git's
+# locale-dependent "nothing to merge" — no diagnosis, and a piped caller read the pipeline's rc.
+# The ship merges a BRANCH, so refuse at the door with the remedy.
+[ -n "$BR" ] || { echo "✖ $WT is on a detached HEAD — the ship merges a branch, so create one first:" >&2
+                  echo "     git -C $WT switch -c <branch-name>" >&2; exit 1; }
+TOP=$(git rev-parse --show-toplevel)
+MAIN=${RTC_MAIN:-$(git rev-parse --git-common-dir | sed 's#/.git$##')}
+PREFIX=$(cfg_get "tag_prefix" "")
+# The invocation moment (plan amendment, user 2026-10-30): the ship mark appears when the loop
+# STARTS, at the tag-push/release confirmations, and at the finale — nowhere else. Routine phases
+# (tests, rebase, refresh, cleanup) stay clean: "testing is too early for the ship."
+phase "🚢 starting the shipping loop — $(basename "$MAIN") ${PREFIX}${V}"
+# The reaping opt-out is validated HERE, before anything irreversible runs: a typo'd value
+# ("flase") must abort the ship at the door — after the tag is pushed is far too late to learn
+# the config was never read. Reaping is the default; the routes are --no-reap (transient),
+# "reap": false in rtc-ship.json (permanent), RTC_SKIP_CLEANUP=1 (environment).
+REAP=$(cfg_get "reap" 1)
+case "$REAP" in
+  1|0) : ;;
+  *) echo "✖ rtc-ship.json: \"reap\": '$REAP' is not a boolean (use true or false) — fix the config" >&2
+     exit 2 ;;
+esac
+# The canonical-checkout rule, validated at the door for the same reason. Absent = no choice made
+# yet: ship around whatever state the checkout is in, and recommend the strict rule. true = refuse
+# unless the checkout is clean on the default branch. false = a deliberate choice, never nagged.
+STRICT=$(cfg_get "require_default_branch_checkout" "")
+case "$STRICT" in
+  ""|1|0) : ;;
+  *) echo "✖ rtc-ship.json: \"require_default_branch_checkout\": '$STRICT' is not a boolean (use true or false) — fix the config" >&2
+     exit 2 ;;
+esac
+# The default branch is NOT assumed. Config first (echoprism uses `master`), then the remote's own
+# HEAD, and only then `main` — a hardcoded `main` would mis-ship a whole repo.
+DEFAULT_BRANCH=$(resolve_default_branch "$MAIN")
+SHIP_LOG_DIR=${RTC_SHIP_LOG_DIR:-${TMPDIR:-/tmp}/rtc-ship-logs/$(basename "$MAIN")-$V}
+
+# --- the door check: the version ARGUMENT is the version the tree carries ----------------------
+# The version gate below compares the surfaces with EACH OTHER; nothing compared them with $V, so a
+# typo'd argument merged main locally and then died inside the notes extraction with no message
+# (fa-ship.sh checked VERSION and the CHANGELOG heading against $V first; the port dropped it).
+door_manifest=$(cfg_get "manifest" ".claude-plugin/plugin.json")
+tree_v=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("version",""))' \
+         "$TOP/$door_manifest" 2>/dev/null || true)
+if [ -n "$tree_v" ] && [ "$tree_v" != "$V" ]; then
+  echo "✖ you asked to ship $V, but $door_manifest says $tree_v — fix the argument or bump the tree" >&2
+  exit 1
+fi
+door_changelog=$(cfg_get "changelog" "CHANGELOG.md")
+if [ -n "$door_changelog" ] && [ -f "$TOP/$door_changelog" ] \
+   && ! grep -qE "^##+[[:space:]]+\[?${V//./\\.}\]?([^0-9.]|$)" "$TOP/$door_changelog"; then
+  echo "✖ $door_changelog has no entry for $V — the release notes would be empty" >&2
+  exit 1
+fi
+
+# --- the rebase: onto the default branch as it is NOW, before any gate ------------------------
+# The header has always promised it and fa-ship.sh did it; the port had no `git rebase` call, so a
+# branch behind the default branch passed every gate and then died at `merge --ff-only`. A conflict
+# is aborted (never left half-rebased) and stops the ship before anything is tested or published.
+mkdir -p "$SHIP_LOG_DIR"
+git fetch -q origin
+if ! git rebase -q "origin/$DEFAULT_BRANCH" >"$SHIP_LOG_DIR/rebase.log" 2>&1; then
+  git rebase --abort >/dev/null 2>&1 || true
+  echo "✖ rebase onto origin/$DEFAULT_BRANCH failed — resolve it in $WT, then re-run:" >&2
+  sed 's/^/      /' "$SHIP_LOG_DIR/rebase.log" | tail -n 15 >&2
+  exit 1
+fi
+
+# --- the version gate, where a hand-rolled ship skips it --------------------------------
+# It runs AFTER the rebase and BEFORE the merge, because the bump lands between "suite green"
+# and "PR opened". This is the gate whose absence let 0.43.2 ship split.
+if ! version_gate; then echo "✖ version surfaces disagree — see above. Ship refused." >&2; exit 1; fi
+# Pre-flight runs exactly ONCE: inside gates() (concurrently with the main suite), or on its own when
+# the suite gates are skipped. The standalone call used to be `hook pre-flight` — no `.sh`, so it
+# looked for a file that never exists and RTC_SKIP_TESTS=1 ships ran no pre-flight at all.
+# gates() already resolves its own vocabulary (124 when any gate STALLED, 1 otherwise) at its
+# single exit — propagate it instead of flattening every failure to 1, so callers can branch on
+# the stall code. `|| exit $?` reads gates' rc: in `a || b`, $? inside b is a's status.
+if [ "${RTC_SKIP_TESTS:-0}" != 1 ]; then gates || exit $?
+else hook pre-flight.sh || exit $?; fi
+
+cd "$MAIN"
+# Two routes to the same published result. CLASSIC: the canonical checkout is clean on the default
+# branch, so it is fast-forwarded in place. AROUND: it is on another branch or mid-edit — someone's
+# work — so the shipped tip goes to origin by ref and the checkout is never touched. Strict repos
+# refuse the second route instead.
+canon_ready=0
+[ "$(git branch --show-current)" = "$DEFAULT_BRANCH" ] \
+  && [ -z "$(git status --porcelain --untracked-files=no)" ] && canon_ready=1
+if [ "$canon_ready" = 0 ] && [ "$STRICT" = 1 ]; then
+  echo "✖ $MAIN is not clean on $DEFAULT_BRANCH, and rtc-ship.json sets \"require_default_branch_checkout\": true" >&2
+  echo "  switch it back to $DEFAULT_BRANCH and commit or set aside its edits, or set the key to false" >&2
+  exit 1
+fi
+# 1.6.0: no more per-ship nudge for an absent require_default_branch_checkout — the user-level
+# defaults template (created + announced once at first use) now carries the policy default, so
+# an absent repo key INHERITS it; the template's creation announcement replaces the repeated nudge.
+git fetch -q origin
+if [ "$canon_ready" = 1 ]; then
+  git pull -q --ff-only origin "$DEFAULT_BRANCH"
+  git merge -q --ff-only "$BR"
+  SHIP_REF=$DEFAULT_BRANCH
+else
+  # Fast-forward only, never forced: origin may have moved since the rebase (a concurrent ship).
+  git merge-base --is-ancestor "origin/$DEFAULT_BRANCH" "$BR" || {
+    echo "✖ origin/$DEFAULT_BRANCH has moved since the rebase — re-run the ship (it rebases first)" >&2
+    exit 1; }
+  SHIP_REF=$BR
+  phase "the canonical checkout is on $(git branch --show-current || echo '?') — shipping around it, untouched"
+fi
+
+# Extracted with python, not an awk program assembled from quoted fragments: the bracket-optional
+# heading form plus an interpolated version made a regex too fragile to trust in shell quoting.
+# Both heading styles are accepted (## 1.2.3 and ## [1.2.3]).
+# Notes come from the SHIPPED tree ($TOP), never the canonical checkout, which on the AROUND route
+# holds someone else's branch and edits.
+# The CONFIGURED changelog ($door_changelog, the same key the gate reads) — a hardcoded CHANGELOG.md
+# gave a CHANGES.md repo no notes (2026-10-25 review). An empty key = no changelog = generated notes.
+notes=$(if [ -n "$door_changelog" ] && [ -f "$TOP/$door_changelog" ]; then CHANGELOG_FILE="$TOP/$door_changelog" VERSION="$V" python3 - <<'PYEOF'
+import os, re, sys
+path, version = os.environ["CHANGELOG_FILE"], os.environ["VERSION"]
+text = open(path, encoding="utf-8", errors="replace").read()
+m = re.search(r"^##+[ \t]+\[?" + re.escape(version) + r"\]?\b", text, re.M)
+if not m:
+    sys.exit(1)
+# Skip to the end of the HEADING line: a heading may carry a date and title after the version
+# (`## [0.6.4] — 2026-10-24 — …`), and those are not release notes.
+nl = text.find("\n", m.end())
+rest = text[len(text) if nl == -1 else nl + 1:]
+# Stop at the next SAME-LEVEL heading only: `##+` would also match `###`, truncating every
+# entry at its first sub-heading and producing an empty release note.
+nxt = re.search(r"^##(?!#)", rest, re.M)
+sys.stdout.write(rest[:nxt.start()] if nxt else rest)
+PYEOF
+else echo ""; fi)
+git tag -a "${PREFIX}${V}" -m "$(basename "$MAIN") $V — $TITLE
+
+$notes" "$SHIP_REF"
+if [ "$SHIP_REF" = "$DEFAULT_BRANCH" ]; then
+  git push -q origin "$DEFAULT_BRANCH" "${PREFIX}${V}"
+else
+  # A plain (unforced) push: git itself refuses anything but a fast-forward of the default branch.
+  git push -q origin "$BR:refs/heads/$DEFAULT_BRANCH" "${PREFIX}${V}" || { echo "✖ push refused" >&2; exit 1; }
+  # Keep the local default-branch ref current when no checkout holds it (fetch refuses if one does).
+  git fetch -q origin "$DEFAULT_BRANCH:$DEFAULT_BRANCH" 2>/dev/null || true
+fi
+phase "🚢 merged, tagged ${PREFIX}${V}, pushed"
+
+# --- the tag must be VISIBLE, not merely pushed ------------------------------------------------
+# A push returns BEFORE the host serves the new state, and the window is real (measured 2026-10-14:
+# raw + ls-remote served the pre-push state for about a minute). The refresh step resolves the
+# published MANIFEST from that CDN, so a ship that moves on immediately can print "done — v1.2.3 is
+# live" while every installer still resolves the previous version. Measured on 0.6.7: exactly that
+# — get-haiggoh read the stale manifest, reported "0.6.6 (current)" and copied nothing, and only a
+# manual retry landed it. The fifth silent-failure class in this loop.
+github_slug() {  # print <owner>/<repo> when origin is a GitHub remote, in ANY of its forms; else nothing
+  # The CONFIGURED url, not `git remote get-url`: get-url applies url.*.insteadOf rewriting, so a user
+  # whose config rewrites https://github.com/ to SSH (common) got the SSH form here — which this
+  # parser used to mangle into `github/<owner>/<repo>` and 404 on every poll (found 2026-10-31; the
+  # rehearsal never noticed because its stub CDN ignored the URL it was asked for).
+  local url
+  url=$(git -C "$MAIN" config --get remote.origin.url 2>/dev/null) || return 0
+  printf '%s\n' "$url" | sed -n -E \
+    -e 's#^(https?://([^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+/[^/]+)$#\3#p' \
+    | sed -e 's#\.git$##' -e 's#/$##'
+}
+published_version() {  # the version the PUBLISHED manifest declares, or "" if it cannot be read
+  local body owner_repo
+  owner_repo=$(github_slug)
+  [ -n "$owner_repo" ] || return 0
+  body=$(curl -fsS --max-time 20 \
+    "https://raw.githubusercontent.com/$owner_repo/$DEFAULT_BRANCH/$(cfg_get manifest .claude-plugin/plugin.json)" 2>/dev/null) || body=""
+  printf '%s' "$body" | sed -n -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1
+  return 0
+}
+
+vis_seen=0
+if [ "${RTC_TAG_VISIBILITY:-1}" = 1 ] && [ -z "$(github_slug)" ]; then
+  # Not a GitHub remote (another host, a local path): installers do not resolve it through
+  # raw.githubusercontent.com, so this check cannot see what they see. Skip it OUT LOUD.
+  phase "visibility check skipped: origin ($(git -C "$MAIN" config --get remote.origin.url)) is not a GitHub remote"
+elif [ "${RTC_TAG_VISIBILITY:-1}" = 1 ]; then
+  vis_tries=0
+  while :; do
+    got=$(published_version)
+    if [ "$got" = "$V" ]; then phase "🚢 tag ${PREFIX}${V} is VISIBLE to installers"; vis_seen=1; break; fi
+    vis_tries=$((vis_tries + 1))
+    if [ "$vis_tries" -ge "${RTC_TAG_VISIBILITY_TRIES:-6}" ]; then
+      echo "✖ the published manifest declares ${got:-<nothing>}, not $V — installers still resolve the old version" >&2
+      echo "  the tag and the branch are pushed, but nothing is released yet. Re-check, then re-run:" >&2
+      echo "    curl -s https://raw.githubusercontent.com/<owner>/<repo>/$DEFAULT_BRANCH/$(cfg_get manifest .claude-plugin/plugin.json)" >&2
+      echo "    rtc-ship.sh $WT $V \"$TITLE\"" >&2
+      exit 1
+    fi
+    phase "tag not visible yet (${got:-<nothing>}) — waiting ${RTC_TAG_VISIBILITY_DELAY:-20}s (try $vis_tries/${RTC_TAG_VISIBILITY_TRIES:-6})"
+    sleep "${RTC_TAG_VISIBILITY_DELAY:-20}"
+  done
+fi
+
+# --- assets: built by the repo's own hook, so the tool never hardcodes a filename ----------
+if [ -x "$TOP/.rtc/pre-package.sh" ]; then
+  ( cd "$TOP" && run_logged "pre-package" "$SHIP_LOG_DIR/pre-package.log" ./.rtc/pre-package.sh ) \
+    || { echo "✖ pre-package failed" >&2; exit 1; }
+fi
+# Resolve the globs in the MAIN shell, not a process substitution: an `exit` inside `< <(...)`
+# only leaves that subshell, so a glob matching nothing would be dropped, the pipe would carry on
+# with the globs that DID match, and the ship would publish a release missing an asset while
+# reporting success — indistinguishable from a working release until someone tries to install it.
+ASSETS=(); MISSING=()
+# `set -f` around the split: each pattern arrives as ONE word from the config, and an unquoted
+# for-word PATHNAME-EXPANDS against the CURRENT directory — which is $MAIN here, after the merge
+# (measured 2026-10-26, free-agents 0.46.2: MAIN held the previous release's leftover
+# dist/free-agents-0.46.1.tar.gz, the pattern expanded into literal filenames THERE, and compgen
+# in the worktree then matched nothing — aborting the ship AFTER the tag was pushed). The shell
+# must split the value but never glob it; compgen -G below is the only globber, and it runs in $TOP.
+set -f
+for g in $(cfg_get "assets" ""); do
+  [ -n "$g" ] || continue
+  # `|| true` inside the substitution: a non-matching glob makes compgen exit non-zero, and that
+  # status becomes the assignment's own — under `set -e` it aborts the ship before the message
+  # below can say WHICH glob failed. Exit code 1 with no reason is the failure this loop prevents.
+  m=$(cd "$TOP" && compgen -G "$g" || true)
+  if [ -z "$m" ]; then MISSING+=("$g"); else
+    # Absolute, worktree-anchored paths: gh runs with cwd=$MAIN, so a relative asset name would
+    # hand it MAIN's file — the stale build this loop exists to avoid. A match that is already
+    # absolute (the config declared an absolute pattern) is passed through untouched.
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      case $f in /*) ASSETS+=("$f") ;; *) ASSETS+=("$TOP/$f") ;; esac
+    done <<< "$m"
+  fi
+done
+set +f
+if [ "${#MISSING[@]}" -gt 0 ]; then
+  echo "✖ asset glob(s) matched nothing in $TOP: ${MISSING[*]}" >&2
+  echo "  the release would ship without them — fix the packaging hook or the glob" >&2
+  exit 1
+fi
+# obs 0057 — a version-bearing asset that does not carry THIS release's version is a stale
+# build: pre-package's output was never asserted, so a previous release's tarball left in dist/
+# satisfied the glob and free-agents 0.45.2/0.45.3 shipped against dist/free-agents-0.44.1.tar.gz
+# (packaging had built nothing current). The rehearsal replays exactly that. Version-free assets
+# (an install script keeps its name across releases) cannot carry a version and pass. FAIL, do
+# not warn — a gate that reports a mismatch and exits 0 trains the operator to believe the green.
+ver_re='-([0-9]+)(\.[0-9]+)+'
+if [ "${#ASSETS[@]}" -gt 0 ]; then
+  for a in "${ASSETS[@]}"; do
+    [ -f "$a" ] || continue
+    b=$(basename "$a")
+    if [[ $b =~ $ver_re ]]; then
+      tok=${BASH_REMATCH[0]#-}
+      if [ "$tok" != "$V" ]; then
+        echo "✖ asset $b carries version $tok, not the release version $V — the build in $TOP is stale" >&2
+        echo "  re-run (or fix) .rtc/pre-package.sh so dist/ holds THIS release's assets" >&2
+        exit 1
+      fi
+    fi
+  done
+fi
+if [ -n "$notes" ]; then
+  nf=$(mktemp); printf '%s\n' "$notes" > "$nf"
+  run_logged "gh release create" "$SHIP_LOG_DIR/gh-release.log" \
+    gh release create "${PREFIX}${V}" --title "$(basename "$MAIN") $V — $TITLE" \
+    --notes-file "$nf" ${ASSETS[@]+"${ASSETS[@]}"} || { rm -f "$nf"; exit 1; }
+  rm -f "$nf"
+else
+  # No changelog to draw notes from (a repo may legitimately have none). Let gh derive them from
+  # the commits rather than shipping an EMPTY body — which is what the first version of this script
+  # did, and an empty release is a release nobody reads.
+  run_logged "gh release create" "$SHIP_LOG_DIR/gh-release.log" \
+    gh release create "${PREFIX}${V}" --title "$(basename "$MAIN") $V — $TITLE" \
+    --generate-notes ${ASSETS[@]+"${ASSETS[@]}"} || exit 1
+fi
+phase "🚢 release published${ASSETS:+ with ${#ASSETS[@]} asset(s)}"
+# ASK the release what it holds (fa-ship.sh listed it; the port dropped it). An upload that exited 0
+# is a claim; the asset list GitHub serves back is the outcome. A declared asset it does not hold
+# fails the ship — "published" over a missing tarball is the silent failure this loop exists to stop.
+if [ "${#ASSETS[@]}" -gt 0 ]; then
+  held=$(gh release view "${PREFIX}${V}" --json assets -q '.assets[].name' 2>/dev/null || true)
+  printf '%s\n' "$held" | sed '/^$/d; s/^/  asset: /'
+  lost=()
+  for a in "${ASSETS[@]}"; do
+    printf '%s\n' "$held" | grep -qxF "$(basename "$a")" || lost+=("$(basename "$a")")
+  done
+  if [ "${#lost[@]}" -gt 0 ]; then
+    echo "✖ the published release does not hold: ${lost[*]} — re-upload with: gh release upload ${PREFIX}${V} <file>" >&2
+    exit 1
+  fi
+fi
+
+installed_version() {  # installed_version <plugin> — the version the INSTALLED cache holds, or ""
+  local plugin=$1 base best v
+  # Overridable so a test can point at a scratch cache: the real one is tool-owned state, and a
+  # ship must never read (let alone write) it except through the tool that owns it.
+  base=${RTC_PLUGIN_CACHE:-$HOME/.claude/plugins/cache}
+  for d in "$base"/*/"$plugin"; do
+    [ -d "$d" ] || continue
+    # Versionless numeric sort: the cache dirs are named by version and there is no index to read.
+    best=$(find "$d" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)
+    [ -n "$best" ] || continue
+    v=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("version",""))' \
+        "$best/.claude-plugin/plugin.json" 2>/dev/null) || v=""
+    [ -n "$v" ] && { printf '%s\n' "$v"; return 0; }
+  done
+  return 0
+}
+
+PLUGIN=$(cfg_get "refresh_plugin" "")
+MARKETPLACE=$(cfg_get "refresh_marketplace" "haiggoh")
+# The refresh — get-haiggoh when it is installed, otherwise Claude Code's own plugin CLI, silently:
+# which tool refreshes is not the user's concern, whether the copy MOVED is, and the read-back
+# decides that either way. Only having neither tool is an error.
+# When get-haiggoh is present but does NOT land (it exits 0 having copied nothing when the manifest
+# it reads is stale — a raw.githubusercontent.com window, or a TLS-inspecting network where its
+# Python fetch fails SSL and it reports "current" anyway; observation 0060, three misses in one
+# day), the loop falls back to the native CLI and reads back AGAIN. Only when BOTH leave the old
+# version in place does the ship fail — and then the message must not blame the CDN if the
+# tag-visibility probe already saw the new version ($vis_seen): what installers see is fine, the
+# local refresh is what failed. The CDN advice stays correct when the probe never ran
+# (RTC_TAG_VISIBILITY=0, or a non-GitHub origin where it cannot run).
+native_refresh() {
+  claude plugin marketplace update "$MARKETPLACE" 2>&1 | sed 's/^/  /'
+  claude plugin update "$PLUGIN@$MARKETPLACE" 2>&1 | sed 's/^/  /'
+}
+if [ -n "$PLUGIN" ] && [ "${RTC_SKIP_REFRESH:-0}" != 1 ]; then
+  refresh_ran=""
+  if command -v get-haiggoh >/dev/null 2>&1; then
+    get-haiggoh apply --only "$PLUGIN" 2>&1 | sed 's/^/  /'
+    refresh_ran="get-haiggoh"
+    gh_got=$(installed_version "$PLUGIN")
+    got=$gh_got
+    if [ "$gh_got" != "$V" ] && command -v claude >/dev/null 2>&1; then
+      native_refresh
+      refresh_ran="both"
+      got=$(installed_version "$PLUGIN")
+    fi
+    if [ "$got" = "$V" ]; then
+      if [ "$refresh_ran" = both ]; then
+        phase "refreshed by claude plugin update (get-haiggoh left ${gh_got:-<none>})"
+      else
+        phase "refreshed by get-haiggoh"
+      fi
+    fi
+  elif command -v claude >/dev/null 2>&1; then
+    native_refresh
+    refresh_ran="claude"
+    got=$(installed_version "$PLUGIN")
+  else
+    echo "✖ cannot refresh the installed $PLUGIN: neither get-haiggoh nor claude is on PATH" >&2
+    echo "  the release is published but NOT confirmed live; set RTC_SKIP_REFRESH=1 to ship without a refresh" >&2
+    exit 1
+  fi
+  # VERIFY it moved — invoking is not the same as landing (the reason the fallback above exists).
+  # Measured 2026-10-25 on 0.6.7: the loop printed "done — v0.6.7 is live" and exited 0 while the
+  # installed copy was still 0.6.6, and only a manual retry landed it. fa-ship.sh checked this;
+  # the generalization dropped it.
+  if [ "${got:-}" != "$V" ]; then
+    echo "✖ the installed $PLUGIN is at ${got:-<none>}, not $V — the refresh did not land" >&2
+    if [ "$vis_seen" = 1 ]; then
+      if [ "$refresh_ran" = both ]; then
+        echo "  both refreshers ran; installed is ${got:-<none>}. Re-check: claude plugin update $PLUGIN@$MARKETPLACE" >&2
+      else
+        echo "  the tag-visibility probe already saw $V — re-run the refresh: claude plugin update $PLUGIN@$MARKETPLACE (or get-haiggoh apply --only $PLUGIN)" >&2
+      fi
+    else
+      echo "  re-run the refresh once after a short delay (the manifest is served by a CDN)" >&2
+    fi
+    exit 1
+  fi
+  phase "installed $PLUGIN is $V"
+fi
+if [ -x "$TOP/.rtc/post-release.sh" ]; then
+  # FAIL, do not warn. post-release is where a repo verifies the refresh it just performed (the
+  # installed copy is at $V, the tap formula points at this release). A warning here lets a release
+  # whose refresh silently did nothing print "done — v1.2.3 is live", which is the exact failure
+  # this loop exists to prevent: a success message over an unverified outcome.
+  if ! ( cd "$TOP" && ./.rtc/post-release.sh >/dev/null ); then
+    echo "✖ post-release hook failed — the release is published but NOT confirmed live" >&2
+    exit 1
+  fi
+fi
+# The release is confirmed live. What happens to the branch that carried it is now safe to decide —
+# and deciding it HERE is the point: the step every hand-rolled ship forgot is the one that lives
+# inside the loop. A cleanup failure never fails a confirmed release; the release outranks the tidy.
+# Three opt-out routes, reaping being the default. A skip is ANNOUNCED, never silent — a tool
+# that quietly stops tidying looks broken from its own output (no-hidden-changes: the tool's
+# own output must show the state it is in).
+skip_reasons=""
+if [ "$no_reap_seen" = 1 ]; then skip_reasons="--no-reap"; fi
+if [ "$REAP" = 0 ]; then
+  skip_reasons="${skip_reasons:+$skip_reasons, }reap:false in rtc-ship.json"
+fi
+if [ "${RTC_SKIP_CLEANUP:-0}" = 1 ]; then
+  skip_reasons="${skip_reasons:+$skip_reasons, }RTC_SKIP_CLEANUP=1"
+fi
+if [ -n "$skip_reasons" ]; then
+  phase "cleanup: skipped ($skip_reasons) — the worktree, its branch and merged branches are kept"
+else
+  cleanup || echo "⚠ cleanup failed; the release itself is done" >&2
+fi
+phase "🏃🚢 done — ${PREFIX}${V} is live"

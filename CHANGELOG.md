@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.6.1] — 2026-11-15
+
+### Added — Wave D: committed portable package (COORDINATION C1/C2)
+
+- New `scripts/build-portable.py` (from the reviewed pilot pattern) generates the committed
+  `portable/` package: same-name manifest, all 9 workflow skills, both hooks, and the
+  shipper scripts at `scripts/` (moved from `bin/` byte-identical — rtc-ship.sh resolves its
+  dir from BASH_SOURCE). Skill refs to this plugin's `${CLAUDE_PLUGIN_ROOT}/bin/rtc-ship.sh`
+  are rewritten to `scripts/`; generic `<repo>/bin/rtc-ship.sh` refs are untouched. The ship
+  loop itself is host-only (git+gh+TTY+push) — components say so (`code: true` only).
+  Emits PORTABLE-BUILD.json + deterministic dist zip.
+- tests/test_portable.py pins freshness, same-name manifest, no bin/, the byte-identical
+  move + doc rewrite, closure, C2 schema, zip, and a functional check that the portable
+  shipper answers --which-config from the portable root.
+
 ## [1.6.0] — 2026-11-14
 
 ### Added — user-level defaults template (waypoint rtc-ship-user-level-default)

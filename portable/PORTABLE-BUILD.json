@@ -1,0 +1,110 @@
+{
+  "builder": "scripts/build-portable.py",
+  "builder_version": "1.0.0",
+  "components": [
+    {
+      "adaptation_class": "mechanical",
+      "evidence_level": "source-inspected",
+      "kind": "manifest",
+      "notes": "same name+version as the host manifest; an installed marketplace plugin wins over a synced copy in Code, so no double-run",
+      "path": ".claude-plugin/plugin.json",
+      "surfaces": {
+        "chat": true,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "mechanical",
+      "evidence_level": "source-inspected",
+      "kind": "skill",
+      "notes": "the 9 workflow skills (triage/execute/close-out/ship/ship-config/...) \u2014 pure guidance, portable on every surface; ${CLAUDE_PLUGIN_ROOT}/bin refs rewritten to scripts/",
+      "path": "skills/",
+      "surfaces": {
+        "chat": true,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "mechanical",
+      "evidence_level": "source-inspected",
+      "kind": "hooks",
+      "notes": "SessionStart nudge + tag-visibility check; bin/ -> scripts/ rewritten",
+      "path": "hooks/hooks.json",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "hook-script",
+      "notes": "bash 3.2 nudge; portable as-is",
+      "path": "hooks/nudge.sh",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "hook-script",
+      "notes": "fetches the HEAD manifest to prove a pushed tag is visible to installers",
+      "path": "hooks/check-tag-visibility.py",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "mechanical",
+      "evidence_level": "source-inspected",
+      "kind": "script",
+      "notes": "the ship loop needs git+gh+TTY and push rights \u2014 HOST-only (Code tab); in Chat/Cowork the skills are guidance and the loop is host-handoff",
+      "path": "scripts/rtc-ship.sh",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": false
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "library",
+      "notes": "version-surface resolver sourced by rtc-ship.sh from its own dir \u2014 scripts/ in portable",
+      "path": "scripts/rtc_version_surface.py",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": false
+      }
+    }
+  ],
+  "files": {
+    ".claude-plugin/plugin.json": "fdfe4576cf4ad174da745e1b170947af5c153cb8bee0826a2e252bdfe43deb56",
+    "hooks/check-tag-visibility.py": "15fcb5fffbcf5563643edfa8b2f41c8f00006e2dd5a8960d3aa909ac1e39b6e3",
+    "hooks/hooks.json": "c8934e1793d3f85e66ef7a45ccdc645f551421bd75384c2b33b28e723baf4588",
+    "hooks/nudge.sh": "559912c07cf631c10b8c059cc19e94a51da0e52a98931f95a2c52cdc66b2d670",
+    "scripts/rtc-ship.sh": "e5e7ee3e02572ff48cbce02812a919532d7e54bde5c6a6a9df2d802384812c26",
+    "scripts/rtc_version_surface.py": "9f2dd7a059723042909288b2003878a157d827056914e3c120a806e00bb7b4eb",
+    "skills/autopilot/SKILL.md": "0de6b9372e291acdfdba72089ba5d15affba93472e1af574ac5e060bc9d4e94e",
+    "skills/close-out-the-run/SKILL.md": "0efa276b17147a010a90f11c2dea4c2a3970df6ee0d24e6a2759a2bfcc25a1bc",
+    "skills/execute-unattended/SKILL.md": "16f6f2f3c8098c49f583bf12861153d116968ea1d10b9eed0270bb21bc0ae875",
+    "skills/run-to-completion/SKILL.md": "4e8ec36172b1e659427902d66c1b984d026be2733433d0c26457b3efb280d698",
+    "skills/ship-config/SKILL.md": "4f2d39ffc6b50f8399e4591e10f1cb944a14b784a137b0685f355d7628914d71",
+    "skills/ship/SKILL.md": "460a6f7fef935d9a084c21cec38ab1ca21fe35261a1bf4f1e67cd6aabd8fb17d",
+    "skills/triage-for-autonomy/SKILL.md": "ad8acd73bfe3018711658bbb9f710e253b41011ef654ba0b376c36315ea77790",
+    "skills/ungate-queue/SKILL.md": "aa49963534e95785908b87d25d7739b0c5a95f5b1c6c9b11a2e53fe8d0e652e4"
+  },
+  "schema": "haiggoh-portable-build/1",
+  "source_commit": "ac39f4e5b9e9f4125708007074de7e60c619688f",
+  "source_repo": "haiggoh/run-to-completion",
+  "transform_version": "1"
+}

@@ -1,0 +1,162 @@
+---
+name: execute-unattended
+description: 'Use DURING an unattended run, once triage has produced a do-now pile: keep moving without stopping between items, switch away the instant something needs a human, protect against irreversible edits before touching a file, and carry each shippable change through to confirmed-live. Do NOT use for choosing what to work on (triage-for-autonomy) or for the closing reconciliation (close-out-the-run).'
+---
+
+# execute-unattended — keep moving, stop only for gates
+
+This is the execution engine. Your goal is momentum: do not stop between items, and do not half-do anything. Momentum means not pausing to *report* or to ask about routine next steps — it does not mean skipping the confirmations described under "What autonomy does not relax" below. Those are the one class of stop that stays.
+
+## Wrap-and-switch
+
+The moment an item turns out to need user input, stop that item immediately. Move to the next Tier 1 item. Do not wait and do not idle: an unattended run has nobody to answer, so a question asked mid-run buys nothing and costs the rest of the queue. Carry the question to the closing wrap instead, where it becomes a gated-list entry the user can answer in one pass.
+
+When you stop, do three things, not one:
+
+1. **Retier the item in the store**, not just in your notes. A gate you only mention in the wrap is gone as soon as the wrap scrolls past; the store is what the next run reads. If the tracker has a blocked state, set it.
+2. **Record the gate reason** — the specific question, not "needs input".
+3. **Name the partial progress in that reason.** State what is already done and what the next run should therefore *not* redo. Without this the next run cannot tell a fresh item from a half-finished one, so it starts over — and the first half is paid for twice.
+
+## Work up to a known gate on purpose
+
+Wrap-and-switch above is *reactive*: it fires when an item turns out to need a human. Make it **anticipatory** too. When you can already see that an item ends at a gate, do not skip the item — deliberately do the part that sits **before** the gate, then stop there and record it.
+
+This is the standard move, not an exception squeezed under granularity. Most gated items are not gated end to end; they are a stretch of ordinary work followed by one question. Skipping the whole item because it *finishes* at a question leaves real, autonomous progress on the table, and it is progress nobody else is going to make while the user is away.
+
+The corollary is worth stating plainly: **a known question is a gate, and actionable work sitting before that question is actionable.** Judge an item by where its first blocker is, not by whether it has one.
+
+## Strategic granularity
+
+Split an item into finer sub-tasks only where splitting avoids a stall on something a human must answer. Splitting everything is overhead. Keep tasks atomic enough to verify, but coarse enough to move fast.
+
+## Re-poll the self-releasing blocks after each item
+
+Some blocked items are not waiting on a *person* at all — they are waiting on **another item in the queue** reaching a milestone. Those release themselves, for free, the moment their target lands. So every time you finish an item, check whether finishing it unblocked anything, and pull whatever it released into the pile.
+
+This costs one lookup per completed item and it is the difference between clearing a chain and clearing one link. If the tracker distinguishes this state (a `waiting` tier with a recorded target, rather than prose in a gate reason) the check is mechanical; if it does not, the dependency is buried in text and you will miss the cascade.
+
+Do **not** treat these as questions for the closing wrap. Nothing is owed by the user, so listing them among the things awaiting an answer inflates the pile they think they have to work through.
+
+## Adapt empirically
+
+When the workflow hits friction, adjust in real time rather than stopping. Capture the lesson where your durable notes live so the next run starts better. Do not let friction break the loop.
+
+## Reversibility before any file edit
+
+Apply this rule before touching any file:
+
+- **Tracked by version control and working tree is clean:** Rely on version control. No backup needed.
+- **Untracked, uncommitted, or outside version control:** Take a timestamped copy first.
+- **Never clobber uncommitted changes you did not make.** They may be a human’s work in progress.
+
+## The ship loop
+
+For any change to a repository or published artifact, follow this ordered list:
+
+1. Verify the change does what it claims.
+2. **Dogfood it pre-merge**, from the working branch, whenever the delivery mechanism offers a way to consume a local checkout in place. See *Where the dogfood step goes* below.
+3. Bump the artifact’s version — in **every** place that states it, not just the manifest (changelog entry, docs, any embedded string). A version that disagrees with itself is worse than one that was never bumped.
+4. Commit.
+5. Push the branch.
+6. **Land it on the branch consumers actually resolve.** Merge to the default branch — see *The default-branch step* below.
+7. **Tag the version.** An annotated tag on the release commit, matching the version you just bumped.
+8. **Cut a release, when appropriate.**
+9. Reinstall or otherwise refresh the consumed copy.
+10. Confirm the change is live **in the installed copy, not just in the source tree**.
+11. **Dogfood the distributed copy:** exercise the new behaviour through the installed artifact, against real state.
+
+**Step 1 only counts a test run that finished and exited 0.** A suite that was killed, timed out, hung until you stopped it, or was cut short by a tool's output or time limit has proved nothing, and neither has one whose summary you only saw part of. Record its result as **UNKNOWN**, never as passing: treat UNKNOWN as a gate on that item (rerun it narrower, give it longer, or report it as unverified), and do not carry it into a "tests pass" claim, a version bump, or a merge. Check the exit status, not the last lines you happened to see — a summary that says "42 passed" from a run that was then killed is a partial count, not a result.
+
+Steps 10 and 11 are not the same check, and stopping at 10 is the usual mistake. Step 10 asks *did the new code arrive*; step 11 asks *does it do the thing*. A correct version string is evidence of a successful copy and nothing more — the change can be live and inert, or live and wrong, and both look identical from the version number. Take the specific behaviour the change claims and run it: if you added a command, run that command; if you changed a pass, perform the pass. Failing to fire is a result worth having, and finding it now is the entire point of doing it before you stop.
+
+The earlier steps are what make that possible at all. A push without a tag leaves no immutable reference to what shipped, so the next person diffing a regression has a version number that points at a moving branch. And source-versus-installed drift is why step 9 exists: a change that is only in the source tree has not shipped.
+
+### The default-branch step
+
+An installer or update command typically resolves an artifact from the repository's **default branch**, not from whatever branch you were working on. That is a deliberate property of a distribution tool, not a shortcoming: what it fetches is what a consumer gets. But it has a consequence the ship loop has to state, because it is invisible from inside the branch — **a pushed branch is not yet obtainable.** Steps 9 to 11 will happily refresh, confirm and exercise the *previous* version and report success, because that is genuinely what is published.
+
+So before you check anything downstream, establish which ref the consuming path resolves, and get the change onto it. Usually that means merging to the default branch. Do not read a green step 10 as evidence you skipped nothing: if the version string did not change, the most likely reason is that nothing was published, not that the refresh was a no-op.
+
+Where an installer *can* be pointed at a branch, tag or commit, prefer not to do it as a routine dev loop. A pin written into a published catalog is mutable state in a place consumers read, it keeps succeeding silently after the branch stops being interesting, and removing it depends on someone remembering. Pinning earns its keep for a deliberate, visible purpose with an obvious removal trigger — holding consumers at a known-good version after a bad release — not as a way to avoid merging.
+
+### Where the dogfood step goes
+
+Merging *in order to test* has the loop backwards: it makes the default branch the place where unverified work lands, and the pressure to merge fast is exactly when verification gets skipped. Dogfood twice instead, and know what each pass buys:
+
+- **Pre-merge (step 2)** answers *does the behaviour work*. Many delivery mechanisms can consume a local checkout — a local source, a path-based install, a link mode, a dev/editable install. Where one exists, use it: no version bump or push is needed and nothing published changes, which makes it the cheaper and more honest place to find a broken feature.
+
+  **Establish whether that route LINKS the checkout or COPIES it, before you rely on it.** A link means your edits are live. A copy means they are not, and that is the case that wastes an afternoon: the edit sits in the source while the installed copy stays stale, and the refresh command is often version-gated, so it reports "already up to date" and exits 0 without copying anything. Every command succeeds and the behaviour you are testing is the old one. Verify by changing something observable in the source and confirming it is observable through the installed path — not by the refresh command's exit code. If the route copies, a version bump per round is usually what forces propagation, and running the code directly from the checkout is usually faster than fighting the installer.
+
+  **When that goes wrong, the tempting fix is to edit the installed copy directly. Do not.** An installed artifact cache is derived state: the next update overwrites it silently, so the change cannot ship and cannot even be trusted while you test. A sandbox may also refuse writes there, which surfaces as a permissions error that invites further workarounds. If you are editing a derived copy to make a test pass, the loop is wrong, not the permissions.
+- **Post-distribution (step 11)** answers a different question: *does it work the way a consumer receives it* — through the real fetch, the real install path, the real packaging. Only the published ref can prove that, and packaging-only failures show up nowhere else.
+
+If no pre-merge route exists, say so and rely on step 11 — but check for one before concluding it, because "I had to merge to try it" is usually a route that was never looked for.
+
+**"When appropriate" is a real judgement, not a euphemism for always.** A release is appropriate when it is how a consumer *learns about or obtains* the change: the artifact is installed or updated from the release surface, or the change is user-facing enough that its notes are the changelog people will actually read. It is not appropriate for a change no consumer resolves through that surface — an internal refactor, a fixture, a typo. Tagging is different: tag every version bump, because a tag is cheap, immutable and answers a question a release cannot.
+
+If you find you cannot tag or release — no permission, no remote, no such surface — that is a gate on that item, recorded like any other. Do not quietly redefine the item as done at step 4.
+
+### Version surfaces and version facts
+
+- **Enumerate the repo's version surfaces, not your recollection of them.** The manifest
+  and the changelog are the easy two; drift lives in the extras — a bare `VERSION` file, a
+  roadmap's "current version" line — and extension-less files are invisible to
+  extension-filtered sweeps, so list the repo root rather than grepping by extension. If
+  the repo carries its own version-consistency test, run it and treat its pass as the bump
+  being complete: a hand-rolled check of one or two surfaces was never the gate, and a
+  surface list held in your head is a stale value waiting to happen.
+- **Check whether a CHANGELOG section's version already shipped before adding to it.**
+  After a rebase or a fast-moving main, "version X is unreleased" is a fact about the
+  world that may have changed — `git tag -l "vX.Y.Z"` (or `git tag --contains`) decides.
+  A fast-forward merge cannot conflict, so nothing else will stop a released section from
+  silently swallowing new bullets.
+- **Deriving which commit shipped which version: read blobs, don't trust a filtered
+  log.** `git log -- <path>` applies history simplification and drops merge commits, so a
+  bump made on a merge looks fictional — real releases have been reported as
+  never-existing this way. Use `git log --full-history -m`, or walk
+  `git rev-list --first-parent` and read the blob at each commit. When grouping commits
+  into releases, a commit belongs to the **next** version bump at or after it (a commit
+  made after one bump still reads the old version), and a release's date is the date of
+  **its** bump commit, never of the commit being described.
+
+## Milestone wraps
+
+Emit a short status after each completed item and keep going. The wrap is for the human reading later, not a request for permission.
+
+## Budget and resource discipline
+
+As the resource you are spending gets scarce, prefer clean self-contained steps and lean harder on a cheaper delegate. When it is nearly exhausted, stop at a clean seam rather than being cut off mid-item.
+
+## Delegation
+
+Decide per step whether a cheaper delegate does it, and decide it up front rather than mid-grind — an intention to offload later reliably becomes "did it all myself". Default delegatable work to a delegate lane; keep a step for yourself when it needs judgement no delegate has, or when briefing and checking it would cost more than doing it. Verify whatever comes back against your usual verification discipline before building on it.
+
+**A delegate is not one thing.** Local inference and free/cheap remote APIs are separate lanes with separate constraints (local: hardware-bound, private, works offline; remote: usually faster, needs network, provider-specific limits). Route each step to whichever lane fits it, and when several independent items are ready at once and both lanes have spare capacity, run them in parallel across lanes rather than serializing through one.
+
+**Decide before you read the inputs, and watch the distribution.** If you open the material to judge whether delegating is worth it, the expensive part is already spent and delegating afterwards is theatre — so "I have already read it" means the decision came too late, not that you should keep it. And note that "needs my judgement" and "not worth the overhead" between them can excuse *every* step: each call looks fine alone, so the tell is the aggregate. If a run delegates **nothing**, that is the thing to justify, once, explicitly — not a per-step shrug.
+
+### While a delegate runs long
+
+Silence from a briefed delegate (a background agent, a workflow, a long build) is normal, not a fault.
+Check **once** whether it is stuck or slow — its transcript or log tail, the working tree's status —
+then stop watching: every idle-poll is a turn spent doing nothing. Use the wait, in this order: prepare
+the next phase (read the code it touches, pre-verify the data shapes it depends on, draft its brief);
+reconcile records the finished phases made stale; finish leftover docs or gates in
+files the delegate will not touch. Never edit a file it may write, and never run full suites or mutation batteries against
+the tree it is working in. Keep interim changes in their own commit so its eventual diff stays readable.
+
+## What autonomy does not relax
+
+Destructive or hard-to-reverse actions still need explicit confirmation. This includes deleting data, force-pushing, publishing to a shared or public destination, or changing shared infrastructure. Get that authorization in the up-front question pass so the loop does not stall on it late.
+
+**The ship loop makes this sharper, not looser.** Its later steps *are* public actions: a merge to the default branch makes the change obtainable by every consumer, a pushed tag and a cut release are both visible and awkward to retract, and a release notifies and indexes. So authorize the ship loop **to a named depth** in the up-front pass — through push, through merge, through tag, or through release — rather than treating "you may push" as covering everything downstream of it. Push and merge are worth distinguishing precisely because the gap between them is where "shipped" is claimed too early: pushing a branch affects nobody, while landing it on the default branch is the step that ships. Publishing more than you were permitted is not a small overreach just because the code was correct. Where the depth stops, the loop stops with it: do the steps you are cleared for, record the rest as a gate, and say which step you stopped at.
+
+If you reach such an action without having asked, the absence of anyone to answer is **not** permission. Treat it as a gate like any other: record it, leave the destructive step undone, and move on. An unattended run may not upgrade its own authority just because asking is inconvenient — that is the one place where "keep moving" yields.
+
+## When NOT to use this
+
+Do not run this way while the user is actively iterating with you turn by turn: the whole design assumes nobody is reading between items, so suppressing check-ins in a live conversation just removes their steering. Use `triage-for-autonomy` to choose what to work on, and `close-out-the-run` to reconcile when the run ends.
+
+## Branding (🏃)
+
+When you begin working under this skill, lead your first substantive reply with "🏃 run-to-completion:" so the user can see which plugin just became active — whichever of the plugin's skills loaded. When you ask the user to approve shipping, ask it with the ship mark: "🚢 are you approving to ship the new release?"
