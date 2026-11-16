@@ -145,5 +145,27 @@ is "a tree edited WHILE the suite runs still reports the run" "0" \
 is "  but stamps NOTHING: neither the tested nor the edited tree is proven green" "0" "$(stampcount "$TMP/mid")"
 has "  and says why" "$(cat "$TMP/mid/log/out")" "changed during the run"
 
+echo "== a test_cmd whose tail quotes an interpreter call inside echo '…' is a CONFIG error =="
+# 2026-11-16 incident: brief-agents' rtc-ship.json ended in `echo 'PY=…; "$PY" -m pytest …'` — the
+# suite was PRINTED, never run, and the gate stamped red trees green (v0.2.4 shipped that way).
+# A quoted pytest/python as the FINAL, unpiped segment of a test_cmd is never intentional.
+mkrepo "$TMP/vacuous"
+cat > "$TMP/vacuous/rtc-ship.json" <<'JSON'
+{"tag_prefix":"v","test_cmd":"bash tests/test_x.sh ; echo 'PY=\"$(command -v python3)\"; \"$PY\" -m pytest -q tests/test_portable.py'"}
+JSON
+( cd "$TMP/vacuous" && git add -A && git -c user.email=t@t -c user.name=t commit -qm vacuous-cmd )
+is "vacuous test_cmd is refused: exit 2, not a pass" "2" "$(gate "$TMP/vacuous")"
+has "  naming the quoted segment" "$(cat "$TMP/vacuous/log/out")" "test_cmd"
+has "  explaining the vacuous echo" "$(cat "$TMP/vacuous/log/out")" "never run"
+is "  and the tree is NOT stamped" "0" "$(stampcount "$TMP/vacuous")"
+mkrepo "$TMP/piped"
+# control: the SAME quoted line piped into parallel DOES execute (parallel runs each input
+# line), so it is legal — the guard must not fire on it.
+cat > "$TMP/piped/rtc-ship.json" <<'JSON'
+{"tag_prefix":"v","test_cmd":"echo '\"$HOME/.local/bin/pytest\" -q tests' | parallel -j 1"}
+JSON
+( cd "$TMP/piped" && git add -A && git -c user.email=t@t -c user.name=t commit -qm piped-cmd )
+is "a quoted interpreter line that IS piped (parallel executes it) is allowed" "0" "$(gate "$TMP/piped")"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

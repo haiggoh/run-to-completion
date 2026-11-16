@@ -834,6 +834,16 @@ gates() {
   # command comes from the config, and an UNCOLLECTED suite is a failure, never a silent pass.
   local test_cmd; test_cmd=$(cfg_get "test_cmd" "")
   if [ -n "$test_cmd" ]; then
+    # A test_cmd whose FINAL, unpiped segment quotes an interpreter call inside echo '…' prints
+    # the suite command and never runs it — the gate then passes on trees whose suite is red
+    # (2026-11-16: brief-agents' rtc-ship.json shipped exactly this shape; v0.2.4's gate
+    # stamped a 4-failure tree green). A quoted pytest/python at the unpiped tail of a test_cmd
+    # is never intentional: refuse it as a config error, before any gate launches.
+    if printf '%s' "$test_cmd" | grep -qE "echo[[:space:]]+['\"].*(pytest|python3?|python).*['\"][[:space:]]*$"; then
+      echo "✖ rtc-ship.json test_cmd ends in a quoted echo of an interpreter call — that suite is never run, so the gate would pass vacuous. Unquote it (run it directly, or pipe the echo into parallel):" >&2
+      printf '%s\n' "$test_cmd" | grep -oE "echo[[:space:]]+['\"][^'\"]*" >&2
+      return 2
+    fi
     timeout_vs_stall_warn "tests (config)" "$test_cmd"
     gate_once "tests (config)" "$d/main" "$test_cmd" || return 2
     wrc=$GATE_RC
