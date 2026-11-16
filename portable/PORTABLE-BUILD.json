@@ -88,11 +88,11 @@
     }
   ],
   "files": {
-    ".claude-plugin/plugin.json": "fdfe4576cf4ad174da745e1b170947af5c153cb8bee0826a2e252bdfe43deb56",
+    ".claude-plugin/plugin.json": "b907b60a09c9d59dd4aec250655449411c9e2eb5f4ccbc3608d42a2df4200f1d",
     "hooks/check-tag-visibility.py": "15fcb5fffbcf5563643edfa8b2f41c8f00006e2dd5a8960d3aa909ac1e39b6e3",
     "hooks/hooks.json": "c8934e1793d3f85e66ef7a45ccdc645f551421bd75384c2b33b28e723baf4588",
     "hooks/nudge.sh": "559912c07cf631c10b8c059cc19e94a51da0e52a98931f95a2c52cdc66b2d670",
-    "scripts/rtc-ship.sh": "5783feea46639a5ca83fcc76dc59320c5e9782e4dd71805c639178766f4b4382",
+    "scripts/rtc-ship.sh": "eaad08999b4a960f8d15fe74eb20cbaf4e0122ca3ea4494687ff9c126b8b241f",
     "scripts/rtc_version_surface.py": "9f2dd7a059723042909288b2003878a157d827056914e3c120a806e00bb7b4eb",
     "skills/autopilot/SKILL.md": "0de6b9372e291acdfdba72089ba5d15affba93472e1af574ac5e060bc9d4e94e",
     "skills/close-out-the-run/SKILL.md": "0efa276b17147a010a90f11c2dea4c2a3970df6ee0d24e6a2759a2bfcc25a1bc",
@@ -104,7 +104,7 @@
     "skills/ungate-queue/SKILL.md": "aa49963534e95785908b87d25d7739b0c5a95f5b1c6c9b11a2e53fe8d0e652e4"
   },
   "schema": "haiggoh-portable-build/1",
-  "source_commit": "ed314ace835140d940a73367d9664ea628684f78",
+  "source_commit": "7e9bf96299698c07b74a090070934f473950edce",
   "source_repo": "haiggoh/run-to-completion",
   "transform_version": "1"
 }

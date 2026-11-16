@@ -71,6 +71,20 @@ echo "== the read-only modes stay allowed on the canonical checkout =="
 rc=$?
 is "--versions-only on the canonical checkout is not the door (exit 0)" "0" "$rc"
 
+echo "== a placeholder-only CHANGELOG section refuses the ship at the door =="
+# 2026-11-16: the door verified the heading EXISTED, so "- (release notes go here)" sailed
+# through and was published verbatim as the GitHub release body (brief-agents v0.2.4/v0.2.5,
+# cost-tracker v0.20.13). The release body IS the section, so placeholder-only = refuse.
+P="$TMP/door-ph"; rehearse "$P"
+( cd "$P/wt" && printf '# Changelog\n\n## 0.2.0\n\n- (release notes go here)\n\n## 0.1.0\n\nfirst\n' > CHANGELOG.md \
+    && git add -A && git -c user.email=t@t -c user.name=t commit -qm placeholder )
+rc=$(ship_to "$P" "$P/wt" 0.2.0 'placeholder section')
+is "placeholder section: ship exits 1, before any git step" "1" "$rc"
+# the DOOR message specifically ("write the release notes first") — the release-time backstop
+# at the tag step uses a different message, so this pins the door, not the backstop
+has "  stderr names the DOOR placeholder refusal" "$(cat "$P/out")" "write the release notes first"
+is "  and origin got NO tag" "" "$(git -C "$P/origin.git" tag -l)"
+
 echo "== a linked worktree sails past the door and ships =="
 rc=$(ship "$D" 0.2.0 'second')
 is "shipping the worktree exits 0" "0" "$rc"

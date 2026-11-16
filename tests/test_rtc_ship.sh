@@ -144,6 +144,17 @@ is "and wrote nothing" "2.0.0" "$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$B
 "$ROOT/bin/rtc-ship.sh" --bump-versions "$B" 2.0.0 >/dev/null 2>&1
 is "re-bumping the same version does not duplicate the changelog heading" "1" "$(grep -c '^## 2\.0\.0' "$B/CHANGELOG.md")"
 
+# 2026-11-16: the placeholder seed shipped as the published release body on three releases —
+# a title argument now seeds the section instead; without it the placeholder remains AND the
+# ship door refuses to publish it (tested in test_ship_door.sh).
+"$ROOT/bin/rtc-ship.sh" --bump-versions "$B" 2.0.1 "fix: seeded from the title argument" >/dev/null 2>&1
+is "bump with a title exits 0" "$?" "0"
+has "  the new section is seeded with the title" "$(sed -n '/^## 2\.0\.1/,/^## /p' "$B/CHANGELOG.md")" "fix: seeded from the title argument"
+is "  and carries no placeholder" "0" "$(sed -n '/^## 2\.0\.1/,/^## /p' "$B/CHANGELOG.md" | grep -c 'release notes go here')"
+"$ROOT/bin/rtc-ship.sh" --bump-versions "$B" 2.0.2 >/dev/null 2>&1
+has "  without a title the placeholder remains (the door still refuses it)" \
+  "$(sed -n '/^## 2\.0\.2/,/^## /p' "$B/CHANGELOG.md")" "(release notes go here)"
+
 # A changelog with an [Unreleased] section on top must get a VERSIONED entry — the style
 # source may not be the Unreleased heading (council review 2026-10-31).
 U="$TMP/unrel"; mkdir -p "$U/.claude-plugin"

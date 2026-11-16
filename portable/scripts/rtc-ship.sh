@@ -20,7 +20,9 @@
 #   rtc-ship.sh --test-only <worktree-dir>    run the gates and stamp the tree, ship nothing
 #   rtc-ship.sh --versions-only <worktree-dir>  the version gate alone (fast, pre-commit)
 #   rtc-ship.sh --check-versions <worktree-dir>  alias of --versions-only (check-only, writes nothing)
-#   rtc-ship.sh --bump-versions <worktree-dir> <version>  rewrite the declared version surfaces
+#   rtc-ship.sh --bump-versions <worktree-dir> <version> [title]  rewrite the declared version
+#                   surfaces; with a title, the new CHANGELOG section is seeded with it (not the
+#                   placeholder — the door refuses to ship a placeholder section, 2026-11-16)
 #   rtc-ship.sh --which-config                print the config this repo would use and exit
 #   rtc-ship.sh --help
 #
@@ -615,19 +617,19 @@ extra_surface() {  # extra_surface <top> <surfaces-json> read|write [new-version
   fi
 }
 
-bump_versions() {  # bump_versions <version> — rewrite EXACTLY the surfaces rtc-ship.json declares
+bump_versions() {  # bump_versions <version> [title] — rewrite EXACTLY the surfaces rtc-ship.json declares
   # Split from the check on 2026-10-31 (waypoint rtc-ship-sh-split-the-version): --versions-only
   # verifies and writes nothing; this action writes. Hand-bumping N surfaces is the drift the gate
   # exists to prevent — the 0.49.3 handoff even assumed --versions-only bumps.
-  local v=$1 top manifest changelog vfile roadmap
+  local v=$1 btitle=${2:-} top manifest changelog vfile roadmap
   top=$(resolve_top)
   manifest=$(cfg_get "manifest" ".claude-plugin/plugin.json")
   changelog=$(cfg_get "changelog" "CHANGELOG.md")
   vfile=$(cfg_get "version_file" "")
   roadmap=$(cfg_get "roadmap" "")
-  python3 - "$top" "$manifest" "$changelog" "$vfile" "$v" <<'PY' || return 1
+  python3 - "$top" "$manifest" "$changelog" "$vfile" "$v" "$btitle" <<'PY' || return 1
 import datetime, os, re, sys
-top, manifest, changelog, vfile, v = sys.argv[1:6]
+top, manifest, changelog, vfile, v, btitle = sys.argv[1:7]
 
 def write_atomic(path, data):
     # tmp + os.replace: a crash mid-write must not truncate the surface (council review
@@ -666,7 +668,7 @@ if cp and os.path.exists(cp):
             # ANY '#' line and could insert mid-file).
             newhead = re.sub(r'[0-9]+\.[0-9]+\.[0-9]+', v, m.group(0), count=1)
             newhead = re.sub(r'20\d\d-\d\d-\d\d', datetime.date.today().isoformat(), newhead)
-            entry = newhead + "\n\n- (release notes go here)\n"
+            entry = newhead + "\n\n- " + (btitle or "(release notes go here)") + "\n"
             pos = m.start()
         else:
             # First release: no versioned heading yet — insert after the leading
@@ -675,7 +677,7 @@ if cp and os.path.exists(cp):
             # never be swallowed into the lead block and the entry land AFTER it
             # (waypoint run-to-completion-bump).
             newhead = "## [%s] — %s" % (v, datetime.date.today().isoformat())
-            entry = newhead + "\n\n- (release notes go here)\n"
+            entry = newhead + "\n\n- " + (btitle or "(release notes go here)") + "\n"
             lead = re.match(r'(?:[ \t]*\n|#[^#\n][^\n]*\n|<!--[\s\S]*?-->[^\n]*\n)+', text)
             pos = lead.end() if lead else 0
         write_atomic(cp, text[:pos] + entry + ("\n" if pos else "") + text[pos:])
@@ -1169,13 +1171,14 @@ if [ "$1" = --test-only ]; then
   gates; exit $?
 fi
 if [ "$1" = --bump-versions ]; then
-  [ $# -eq 3 ] || { usage >&2; exit 2; }
+  { [ $# -eq 3 ] || [ $# -eq 4 ]; } || { usage >&2; exit 2; }
   cd "$2"
   V=$3
+  BTITLE=${4:-}
   if ! printf '%s' "$V" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
     echo "✖ version '$V' is not a plain X.Y.Z — nothing written" >&2; usage >&2; exit 2
   fi
-  bump_versions "$V" || { echo "✖ bump failed — fix the surface above and re-run" >&2; exit 1; }
+  bump_versions "$V" "$BTITLE" || { echo "✖ bump failed — fix the surface above and re-run" >&2; exit 1; }
   if ! version_gate; then echo "✖ version surfaces still disagree after the bump" >&2; exit 1; fi
   phase "bumped to $V — all declared surfaces agree"; exit 0
 fi
@@ -1272,6 +1275,26 @@ if [ -n "$door_changelog" ] && [ -f "$TOP/$door_changelog" ] \
   echo "✖ $door_changelog has no entry for $V — the release notes would be empty" >&2
   exit 1
 fi
+# 2026-11-16: a placeholder section PASSED that check and was published verbatim as the release
+# body (brief-agents v0.2.4/v0.2.5, cost-tracker v0.20.13). The release body is the CHANGELOG
+# section verbatim, so a placeholder-only section must stop the ship at the door.
+if [ -n "$door_changelog" ] && [ -f "$TOP/$door_changelog" ]; then
+  door_body=$(python3 - "$TOP/$door_changelog" "$V" <<'PYEOF'
+import re, sys
+text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+v = sys.argv[2]
+m = re.search(r"^##+[ \t]+\[?" + re.escape(v) + r"\]?", text, re.M)
+if m:
+    rest = text[m.end():]
+    nxt = re.search(r"^##(?!#)", rest, re.M)
+    sys.stdout.write(rest[:nxt.start()] if nxt else rest)
+PYEOF
+)
+  if [ "$(printf '%s' "$door_body" | tr -d '[:space:]')" = "-(releasenotesgohere)" ]; then
+    echo "✖ $door_changelog's $V section is still the placeholder — write the release notes first (the release body is taken verbatim from this section)" >&2
+    exit 1
+  fi
+fi
 
 # --- the rebase: onto the default branch as it is NOW, before any gate ------------------------
 # The header has always promised it and fa-ship.sh did it; the port had no `git rebase` call, so a
@@ -1353,6 +1376,13 @@ nxt = re.search(r"^##(?!#)", rest, re.M)
 sys.stdout.write(rest[:nxt.start()] if nxt else rest)
 PYEOF
 else echo ""; fi)
+# The release choke point: the body published to GitHub is this section verbatim — refuse to
+# publish the placeholder (2026-11-16: three releases shipped "(release notes go here)" bodies
+# because the door check only verified the heading EXISTED, not its content).
+if [ -n "$door_changelog" ] && [ "$(printf '%s' "$notes" | tr -d '[:space:]')" = "-(releasenotesgohere)" ]; then
+  echo "✖ release notes for $V are the placeholder — refusing to tag/publish; fill the $door_changelog section first" >&2
+  exit 1
+fi
 git tag -a "${PREFIX}${V}" -m "$(basename "$MAIN") $V — $TITLE
 
 $notes" "$SHIP_REF"

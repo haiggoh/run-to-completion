@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.6.2] — 2026-11-16
+
+### Fixed — two ship-loop defects found by shipping 2026-11-16 (both reproduced live)
+
+- **Vacuous test_cmd guard:** a `test_cmd` whose final, unpiped segment quotes an interpreter
+  call inside `echo '...'` PRINTS the suite command and never runs it — the gate then passes on
+  red trees (brief-agents' rtc-ship.json shipped that shape; its v0.2.4 gate stamped a
+  4-failure tree green). `gates()` now refuses such a test_cmd as a config error (exit 2)
+  before any gate launches and never stamps the tree. A quoted line that IS piped into
+  `parallel` still executes and stays legal. Pinned in `tests/test_gates.sh`
+  (mutation: guard removed -> red tree stamped -> RED; restored -> 33/33).
+- **Placeholder release notes:** `--bump-versions` accepted an optional title that seeds the
+  new CHANGELOG section (placeholder remains without it), the ship DOOR refuses a
+  placeholder-only section for the shipped version, and the release step itself refuses to
+  tag/publish when the extracted notes are the placeholder — three releases
+  (brief-agents v0.2.4/v0.2.5, cost-tracker v0.20.13) published "(release notes go here)"
+  bodies before this. Pinned in `tests/test_rtc_ship.sh` + `tests/test_ship_door.sh`
+  (mutation: door check removed -> RED; restored -> 19/19).
+
 ## [1.6.1] — 2026-11-15
 
 ### Added — Wave D: committed portable package (COORDINATION C1/C2)
