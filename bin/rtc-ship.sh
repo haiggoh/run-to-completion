@@ -732,6 +732,12 @@ version_gate() {
   # separate implementations drifted apart on free-agents 0.50.2 (waypoint
   # run-to-completion-bump).
   rv=""; [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && rv=$(roadmap_target "$top/$roadmap" read)
+  if [ -z "$manifest" ]; then
+    # 1.6.3 plain-repo path: no manifest is declared, so anchor on the declared version_file
+    # (or the changelog when there is none) — previously the empty manifest path read as
+    # "<none>" and refused every plain repo without its own tests/test_version_consistency.sh.
+    if [ -n "$vfile" ] && [ -f "$top/$vfile" ]; then mv="$vv"; else mv="$cv"; fi
+  fi
   echo "  $manifest : ${mv:-<none>}"
   echo "  $changelog (top entry) : ${cv:-<none>}"
   [ -n "$vfile" ] && echo "  $vfile : ${vv:-<none>}"
@@ -1414,12 +1420,28 @@ github_slug() {  # print <owner>/<repo> when origin is a GitHub remote, in ANY o
     -e 's#^(https?://([^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+/[^/]+)$#\3#p' \
     | sed -e 's#\.git$##' -e 's#/$##'
 }
-published_version() {  # the version the PUBLISHED manifest declares, or "" if it cannot be read
-  local body owner_repo
+published_surface() {  # the file on the default branch installers resolve for the version:
+                      # the manifest for a plugin repo, the declared version_file for a plain
+                      # repo ("manifest": "" — 1.6.3; such a repo has no plugin.json on the CDN,
+                      # the old code fetched the empty path, got a 404, and read <nothing> forever)
+  local manifest
+  manifest=$(cfg_get "manifest" ".claude-plugin/plugin.json")
+  if [ -n "$manifest" ]; then printf '%s\n' "$manifest"; return 0; fi
+  cfg_get "version_file" "VERSION"
+}
+published_version() {  # the version the PUBLISHED surface declares, or "" if it cannot be read
+  local body owner_repo surface manifest
   owner_repo=$(github_slug)
   [ -n "$owner_repo" ] || return 0
+  surface=$(published_surface)
+  manifest=$(cfg_get "manifest" ".claude-plugin/plugin.json")
   body=$(curl -fsS --max-time 20 \
-    "https://raw.githubusercontent.com/$owner_repo/$DEFAULT_BRANCH/$(cfg_get manifest .claude-plugin/plugin.json)" 2>/dev/null) || body=""
+    "https://raw.githubusercontent.com/$owner_repo/$DEFAULT_BRANCH/$surface" 2>/dev/null) || body=""
+  if [ -z "$manifest" ]; then
+    # Plain repo: the surface IS the version file — its whole (trimmed) content is the version.
+    printf '%s\n' "$(printf '%s' "$body" | tr -d '[:space:]')"
+    return 0
+  fi
   printf '%s' "$body" | sed -n -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1
   return 0
 }
@@ -1436,9 +1458,9 @@ elif [ "${RTC_TAG_VISIBILITY:-1}" = 1 ]; then
     if [ "$got" = "$V" ]; then phase "🚢 tag ${PREFIX}${V} is VISIBLE to installers"; vis_seen=1; break; fi
     vis_tries=$((vis_tries + 1))
     if [ "$vis_tries" -ge "${RTC_TAG_VISIBILITY_TRIES:-6}" ]; then
-      echo "✖ the published manifest declares ${got:-<nothing>}, not $V — installers still resolve the old version" >&2
+      echo "✖ the published surface ($(published_surface)) declares ${got:-<nothing>}, not $V — installers still resolve the old version" >&2
       echo "  the tag and the branch are pushed, but nothing is released yet. Re-check, then re-run:" >&2
-      echo "    curl -s https://raw.githubusercontent.com/<owner>/<repo>/$DEFAULT_BRANCH/$(cfg_get manifest .claude-plugin/plugin.json)" >&2
+      echo "    curl -s https://raw.githubusercontent.com/<owner>/<repo>/$DEFAULT_BRANCH/$(published_surface)" >&2
       echo "    rtc-ship.sh $WT $V \"$TITLE\"" >&2
       exit 1
     fi

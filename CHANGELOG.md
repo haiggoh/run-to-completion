@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.6.3] — 2026-11-24
+
+### Fixed — the tag-visibility gate and the version gate could never pass for a plain repo
+
+- A repo declaring `"manifest": ""` (e.g. mac-claude-migration) has no `.claude-plugin/plugin.json`
+  on the CDN. `published_version()` fetched the empty manifest path (`raw .../main/` → 404) and
+  read `<nothing>` forever, so after merge+tag+push the visibility gate failed all 6 polls and the
+  release had to be finished by hand (mcm v0.3.1, 2026-11-24). The gate now polls the declared
+  `version_file` (default `VERSION`) on the default branch and compares its whole trimmed content;
+  the failure message names the real surface. The local version gate anchors on the version file
+  (or changelog) when no manifest is declared, instead of refusing with an empty `no version in` path.
+  Pinned by `tests/test_ship_visibility_plain_repo.sh` (mutation-checked: the old script goes RED,
+  the fixed one 6/6; adjacent suites green: visibility_remotes 12/12, tag_visibility 4/4, gates
+  33/33, ship_door 19/19, rtc_ship 94/94, declared_surface 100/100).
+
 ## [1.6.2] — 2026-11-16
 
 ### Fixed — two ship-loop defects found by shipping 2026-11-16 (both reproduced live)
