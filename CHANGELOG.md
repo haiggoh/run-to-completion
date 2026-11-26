@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.7.2] — 2026-11-26
+
+### Changed — release-train paragraph in the ship skill (plan 2026-11-26-merge-not-rebase-published-branches)
+
+- `skills/ship/SKILL.md` "Rules that still apply" now covers preparing the next release while
+  its predecessor is still in review: merge the predecessor's branch into a pushed release
+  branch (never rebase it — it is published), run gate and review in parallel, gate the ship on
+  the predecessor's TAG existing (`git ls-remote --tags`), and re-merge the default branch once
+  more after it ships.
+
 ## [1.7.1] — 2026-11-26
 
 ### Fixed — a launch into an untrusted folder no longer stalls at the trust prompt

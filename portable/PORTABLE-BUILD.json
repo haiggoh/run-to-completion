@@ -88,7 +88,7 @@
     }
   ],
   "files": {
-    ".claude-plugin/plugin.json": "16e17801a694d84254ca2d6e832ab1b6ff6b0732a15554b19daaccd0a2ff1bfe",
+    ".claude-plugin/plugin.json": "003e6dcb19d8500c0ef925996edbc319c3e47ff090b0ec652cb7b6a50127dcda",
     "hooks/check-tag-visibility.py": "15fcb5fffbcf5563643edfa8b2f41c8f00006e2dd5a8960d3aa909ac1e39b6e3",
     "hooks/hooks.json": "c8934e1793d3f85e66ef7a45ccdc645f551421bd75384c2b33b28e723baf4588",
     "hooks/nudge.sh": "21e7399a8ff4424d78a1d481711a81184f9f7dc1817ce4fba25ee2e01cf08457",
@@ -99,13 +99,13 @@
     "skills/execute-unattended/SKILL.md": "16f6f2f3c8098c49f583bf12861153d116968ea1d10b9eed0270bb21bc0ae875",
     "skills/run-to-completion/SKILL.md": "4e8ec36172b1e659427902d66c1b984d026be2733433d0c26457b3efb280d698",
     "skills/ship-config/SKILL.md": "4f2d39ffc6b50f8399e4591e10f1cb944a14b784a137b0685f355d7628914d71",
-    "skills/ship/SKILL.md": "460a6f7fef935d9a084c21cec38ab1ca21fe35261a1bf4f1e67cd6aabd8fb17d",
+    "skills/ship/SKILL.md": "98533a9328e975f0f01c625090cd835c9b5473991fc6c5359f0ea9e2734d4bd6",
     "skills/terminal-handoff/SKILL.md": "0dbf7be9bb8e7aeae1465c63e224c68d881328041e3a67fc65e3395534f99f0e",
     "skills/triage-for-autonomy/SKILL.md": "ad8acd73bfe3018711658bbb9f710e253b41011ef654ba0b376c36315ea77790",
     "skills/ungate-queue/SKILL.md": "aa49963534e95785908b87d25d7739b0c5a95f5b1c6c9b11a2e53fe8d0e652e4"
   },
   "schema": "haiggoh-portable-build/1",
-  "source_commit": "c61ca6bb2956b1dd9f99021f56e9dfb00e975656",
+  "source_commit": "8c15ba41aba54b9e0bdbee4c5f9b102d9cfcea3e",
   "source_repo": "haiggoh/run-to-completion",
   "transform_version": "1"
 }

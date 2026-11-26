@@ -51,6 +51,7 @@ the verdicts. It does not re-implement any loop step.
   discard it.
 - Never force-push; a published tag that is wrong moves only with the user's explicit
   approval (delete + recreate), otherwise fix forward in the next version.
+- **Preparing the next release while its predecessor is still in review.** If release B must contain release A and B's branch is already pushed, merge A's branch into B (never rebase B: it is published) and run B's gate and review in parallel. Gate B's ship on A's TAG existing (`git ls-remote --tags`), never on A's branch; after A ships, merge the default branch into B once more and re-gate if A's tip moved. The ship's own rebase onto the default branch then drops the merge commit and the already-shipped commits by itself.
 - Ask the depth question every time — an earlier "you may push" does not cover merge,
   tag or release.
 - No known errors at release (user rule 2026-11-01): the full gate suite runs on the
