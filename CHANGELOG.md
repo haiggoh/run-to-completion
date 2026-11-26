@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.6.4] — 2026-11-26
+
+### Added — door refuses a CHANGELOG that lost or duplicated a released entry
+
+- The ship door now checks the CHANGELOG against the repo's published tags right after the
+  rebase: HARD-fail when the version being shipped has more than one entry, or when the newest
+  published tag below it has zero or more than one — the rename-in-place case that made
+  motion-pipeline v0.7.1 replace 0.7.0's entry (2026-11-22) and the duplicated [0.20.1]/[0.20.0]
+  headings waypoints carried (2026-11-25). WARN-only for older published tags without an entry
+  and for other duplicated headings, so legacy history cannot block future releases
+  (user decision 2026-11-25: "every tag, warn-only for old"). Tags reach the checker through the
+  environment, not a pipe — the heredoc is python's stdin.
+- Pinned by `tests/test_ship_changelog_tags.sh`: 14 assertions, 9 red first, 5 mutants killed
+  (renamed_previous_refused, duplicate_new_refused, duplicate_previous_refused,
+  older_gap_warns_and_ships, healthy_changelog_ships_silently).
+
 ## [1.6.3] — 2026-11-24
 
 ### Fixed — the tag-visibility gate and the version gate could never pass for a plain repo

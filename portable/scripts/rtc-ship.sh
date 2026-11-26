@@ -732,6 +732,12 @@ version_gate() {
   # separate implementations drifted apart on free-agents 0.50.2 (waypoint
   # run-to-completion-bump).
   rv=""; [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && rv=$(roadmap_target "$top/$roadmap" read)
+  if [ -z "$manifest" ]; then
+    # 1.6.3 plain-repo path: no manifest is declared, so anchor on the declared version_file
+    # (or the changelog when there is none) — previously the empty manifest path read as
+    # "<none>" and refused every plain repo without its own tests/test_version_consistency.sh.
+    if [ -n "$vfile" ] && [ -f "$top/$vfile" ]; then mv="$vv"; else mv="$cv"; fi
+  fi
   echo "  $manifest : ${mv:-<none>}"
   echo "  $changelog (top entry) : ${cv:-<none>}"
   [ -n "$vfile" ] && echo "  $vfile : ${vv:-<none>}"
@@ -1309,6 +1315,58 @@ if ! git rebase -q "origin/$DEFAULT_BRANCH" >"$SHIP_LOG_DIR/rebase.log" 2>&1; th
   exit 1
 fi
 
+# --- the CHANGELOG keeps every released entry, once ------------------------------------------
+# A bump can rename the TOP entry in place: the entry of the release just published vanishes while
+# "top heading == manifest" stays green (motion-pipeline v0.7.1 renamed 0.7.0's entry, 2026-11-22;
+# waypoints carried two [0.20.1] and two [0.20.0] headings, 2026-11-25). Checked against the tags as
+# they are AFTER the fetch above. HARD: $V and the newest published tag below it each have exactly
+# one entry. WARN only: older tags without an entry and other duplicates — legacy history must not
+# block every future release (user decision 2026-11-25).
+if [ -n "$door_changelog" ] && [ -f "$TOP/$door_changelog" ]; then
+  cl_prefix=$(cfg_get "tag_prefix" "v")
+  # Tags travel in the ENV, not a pipe: the heredoc IS python's stdin, so a piped tag list would
+  # be silently replaced by the script text and every check would pass on zero tags.
+  if ! RTC_CL_TAGS=$(git tag -l "${cl_prefix}*") \
+       python3 - "$TOP/$door_changelog" "$V" "$cl_prefix" "$door_changelog" <<'PYEOF'
+import os, re, sys
+path, v, prefix, name = sys.argv[1:5]
+def key(s):
+    return tuple(int(x) for x in s.split("."))
+heads = re.findall(r"^##(?!#)[ \t]+\[?(\d+\.\d+\.\d+)\]?(?![\d.])", open(path, encoding="utf-8",
+                   errors="replace").read(), re.M)
+count = {}
+for h in heads:
+    count[h] = count.get(h, 0) + 1
+tags = sorted({t.strip()[len(prefix):] for t in os.environ.get("RTC_CL_TAGS", "").splitlines()
+               if re.fullmatch(re.escape(prefix) + r"\d+\.\d+\.\d+", t.strip())}, key=key)
+older = [t for t in tags if key(t) < key(v)]
+prev = older[-1] if older else None
+bad = []
+if count.get(v, 0) > 1:
+    bad.append("%s has %d entries for %s — a bump duplicated or renamed an entry" % (name, count[v], v))
+if prev is not None:
+    if count.get(prev, 0) == 0:
+        bad.append("%s has no entry for the published release %s%s — was its entry renamed in place "
+                   "to %s? Restore it from the tag: git show %s%s:%s" % (name, prefix, prev, v, prefix, prev, name))
+    elif count[prev] > 1:
+        bad.append("%s has %d entries for %s — the published entry must appear exactly once"
+                   % (name, count[prev], prev))
+for b in bad:
+    print("✖ " + b, file=sys.stderr)
+missing = [prefix + t for t in older[:-1] if count.get(t, 0) == 0]
+if missing:
+    print("⚠ %s has no entry for older published tag(s): %s (not blocking)" % (name, ", ".join(missing)))
+dups = [h for h, n in count.items() if n > 1 and h not in (v, prev)]
+if dups:
+    print("⚠ %s repeats heading(s) %s (not blocking)" % (name, ", ".join(sorted(dups, key=key))))
+sys.exit(1 if bad else 0)
+PYEOF
+  then
+    echo "✖ $door_changelog lost or duplicated a released entry — ship refused before any gate" >&2
+    exit 1
+  fi
+fi
+
 # --- the version gate, where a hand-rolled ship skips it --------------------------------
 # It runs AFTER the rebase and BEFORE the merge, because the bump lands between "suite green"
 # and "PR opened". This is the gate whose absence let 0.43.2 ship split.
@@ -1414,12 +1472,28 @@ github_slug() {  # print <owner>/<repo> when origin is a GitHub remote, in ANY o
     -e 's#^(https?://([^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+/[^/]+)$#\3#p' \
     | sed -e 's#\.git$##' -e 's#/$##'
 }
-published_version() {  # the version the PUBLISHED manifest declares, or "" if it cannot be read
-  local body owner_repo
+published_surface() {  # the file on the default branch installers resolve for the version:
+                      # the manifest for a plugin repo, the declared version_file for a plain
+                      # repo ("manifest": "" — 1.6.3; such a repo has no plugin.json on the CDN,
+                      # the old code fetched the empty path, got a 404, and read <nothing> forever)
+  local manifest
+  manifest=$(cfg_get "manifest" ".claude-plugin/plugin.json")
+  if [ -n "$manifest" ]; then printf '%s\n' "$manifest"; return 0; fi
+  cfg_get "version_file" "VERSION"
+}
+published_version() {  # the version the PUBLISHED surface declares, or "" if it cannot be read
+  local body owner_repo surface manifest
   owner_repo=$(github_slug)
   [ -n "$owner_repo" ] || return 0
+  surface=$(published_surface)
+  manifest=$(cfg_get "manifest" ".claude-plugin/plugin.json")
   body=$(curl -fsS --max-time 20 \
-    "https://raw.githubusercontent.com/$owner_repo/$DEFAULT_BRANCH/$(cfg_get manifest .claude-plugin/plugin.json)" 2>/dev/null) || body=""
+    "https://raw.githubusercontent.com/$owner_repo/$DEFAULT_BRANCH/$surface" 2>/dev/null) || body=""
+  if [ -z "$manifest" ]; then
+    # Plain repo: the surface IS the version file — its whole (trimmed) content is the version.
+    printf '%s\n' "$(printf '%s' "$body" | tr -d '[:space:]')"
+    return 0
+  fi
   printf '%s' "$body" | sed -n -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1
   return 0
 }
@@ -1436,9 +1510,9 @@ elif [ "${RTC_TAG_VISIBILITY:-1}" = 1 ]; then
     if [ "$got" = "$V" ]; then phase "🚢 tag ${PREFIX}${V} is VISIBLE to installers"; vis_seen=1; break; fi
     vis_tries=$((vis_tries + 1))
     if [ "$vis_tries" -ge "${RTC_TAG_VISIBILITY_TRIES:-6}" ]; then
-      echo "✖ the published manifest declares ${got:-<nothing>}, not $V — installers still resolve the old version" >&2
+      echo "✖ the published surface ($(published_surface)) declares ${got:-<nothing>}, not $V — installers still resolve the old version" >&2
       echo "  the tag and the branch are pushed, but nothing is released yet. Re-check, then re-run:" >&2
-      echo "    curl -s https://raw.githubusercontent.com/<owner>/<repo>/$DEFAULT_BRANCH/$(cfg_get manifest .claude-plugin/plugin.json)" >&2
+      echo "    curl -s https://raw.githubusercontent.com/<owner>/<repo>/$DEFAULT_BRANCH/$(published_surface)" >&2
       echo "    rtc-ship.sh $WT $V \"$TITLE\"" >&2
       exit 1
     fi
