@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+# run-in-terminal — runs a command in a REAL Terminal.app window (for anything that needs
+# a human at a TTY: a sudo or password prompt, an interactive login, a picker, a TUI),
+# then waits for it to take effect.
+#
+#   run-in-terminal --command "<cmd>" [--verify "<shell test>"]
+#                   [--timeout SECONDS] [--label "what this does"]
+#
+# Why this exists: an agent's shell tool has no TTY, so anything that prompts fails
+# ("a terminal is required to read the password"), and the agent can only ask the user
+# to retype the line elsewhere and report back. Instead this opens Terminal.app with
+# the command already entered and running, so the user only answers the prompt. With
+# --verify it then polls for the OUTCOME rather than reporting success just because a
+# window opened — a cancelled or mistyped prompt must not look like it worked.
+# bash 3.2-compatible on purpose (macOS /bin/bash).
+#
+# Example:
+#   run-in-terminal \
+#     --command "sudo xcode-select -s /Applications/Xcode.app/Contents/Developer" \
+#     --verify  '[ "$(xcode-select -p)" = "/Applications/Xcode.app/Contents/Developer" ]' \
+#     --label   "point xcode-select at full Xcode"
+set -uo pipefail
+
+COMMAND=""
+VERIFY=""
+TIMEOUT=300
+LABEL=""
+
+usage() {
+	cat <<'EOF'
+run-in-terminal - run a command that needs a human at a real terminal (a sudo or
+password prompt, an interactive login, a picker, a TUI) in a REAL Terminal.app window,
+then confirm it took effect. macOS only.
+
+Usage:
+  run-in-terminal --command "<cmd>" [--verify "<shell test>"]
+                  [--timeout SECONDS] [--label "what this does"] [--watch SECONDS]
+  run-in-terminal --help
+
+Arguments:
+  --command   the command to pre-enter and run in the window (required)
+  --verify    shell test that passes only once the command worked; if it already
+              passes, prints ALREADY_SATISFIED and opens no window; otherwise it is
+              polled and the result is reported as VERIFIED / NOT_VERIFIED
+  --timeout   seconds to poll --verify (default 300)
+  --label     short description shown in the window banner (any characters)
+  --watch     without --verify: seconds to watch for an early exit (default 8; 0 = none)
+
+Monitoring (default): prints WINDOW_ID=<id>; while waiting, checks whether the window's command
+is still running and stops with EXITED_EARLY + the window's last lines (tokens masked), exit 1,
+instead of waiting out the timeout.
+  -h, --help  show this help and exit (nothing is run)
+
+Environment variables: none read by this script.
+Unknown arguments exit 2 with a message on stderr.
+EOF
+}
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-h|--help) usage; exit 0 ;;
+		--command|--verify|--timeout|--label|--watch)
+			# a value flag with no value used to hang here: `shift 2` fails when only one
+			# argument is left, nothing is consumed, and the loop never ends
+			if [ $# -lt 2 ]; then echo "error: $1 needs a value" >&2; exit 2; fi
+			case "$1" in
+				--command) COMMAND="$2" ;;
+				--verify)  VERIFY="$2" ;;
+				--timeout) TIMEOUT="$2" ;;
+				--label)   LABEL="$2" ;;
+				--watch)   WATCH="$2" ;;
+			esac
+			shift 2 ;;
+		*) echo "unknown argument: $1" >&2; exit 2 ;;
+	esac
+done
+
+if [ -z "$COMMAND" ]; then
+	echo "error: --command is required" >&2
+	exit 2
+fi
+if [ "$(uname -s)" != "Darwin" ]; then
+	echo "run-in-terminal: needs macOS Terminal.app (this is $(uname -s))" >&2
+	exit 2
+fi
+WATCH="${WATCH:-8}"
+case "$WATCH" in *[!0-9]*|'') echo "error: --watch needs a whole number of seconds, got '$WATCH'" >&2; exit 2 ;; esac
+case "${TIMEOUT:-300}" in *[!0-9]*|'') echo "error: --timeout needs a whole number of seconds, got '$TIMEOUT'" >&2; exit 2 ;; esac
+
+# If the desired state already holds, do not interrupt the user at all.
+if [ -n "$VERIFY" ] && ( eval "$VERIFY" ) >/dev/null 2>&1; then
+	echo "ALREADY_SATISFIED: nothing to do"
+	exit 0
+fi
+
+# Build the AppleScript in Python so quotes and backslashes in the command cannot
+# break out of the string literal.
+SCRIPT=$(COMMAND="$COMMAND" LABEL="$LABEL" python3 <<'PY'
+import os
+import shlex
+
+command = os.environ["COMMAND"]
+label = os.environ.get("LABEL", "")
+
+banner = "Claude opened this window"
+if label:
+    banner += f" to {label}"
+
+# echo a short explanation first so the window is self-describing rather than a
+# bare password prompt appearing out of nowhere.
+# shlex.quote: a label with an apostrophe ("this session's") used to close the quote early and
+# abort the whole line with a zsh parse error before the command ran (2026-11-26).
+full = f"clear; echo {shlex.quote(f'=== {banner} ===')}; echo; {command}"
+
+
+def applescript_quote(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+print(
+    'tell application "Terminal"\n'
+    "  activate\n"
+    f'  set t to do script "{applescript_quote(full)}"\n'
+    "  delay 0.3\n"
+    "  return id of (first window whose tabs contains t)\n"
+    "end tell"
+)
+PY
+)
+
+echo "opening Terminal window with the command pre-entered…"
+WINDOW_ID=$(osascript -e "$SCRIPT" 2>/dev/null) || {
+	echo "error: could not drive Terminal.app (Automation permission?)" >&2
+	exit 1
+}
+echo "WINDOW_ID=$WINDOW_ID"
+
+# Cheap monitoring of the window we opened: one property read per poll. `busy` is true while
+# the command runs; false means it ended (or never started, e.g. a shell parse error).
+tab_busy() {
+	osascript -e "tell application \"Terminal\" to get busy of selected tab of window id $WINDOW_ID" 2>/dev/null
+}
+# The window's last lines, long token-like strings masked, for an early-exit report.
+window_tail() {
+	osascript -e "tell application \"Terminal\" to get history of selected tab of window id $WINDOW_ID" 2>/dev/null |
+		sed -E 's/(sk-|ghp_|gho_|eyJ)[A-Za-z0-9._-]{6,}/\1<masked>/g; s/[A-Za-z0-9+\/_=-]{40,}/<masked>/g' |
+		grep -v '^[[:space:]]*$' | tail -15 | sed 's/^/  | /'
+}
+# Ended = two "not busy" reads in a row, never in the first 3 s (the shell is still starting).
+ended_reads=0
+check_ended() {
+	[ "$1" -lt 3 ] && return 1
+	if [ "$(tab_busy)" = "false" ]; then ended_reads=$((ended_reads + 1)); else ended_reads=0; fi
+	[ "$ended_reads" -ge 2 ]
+}
+exited_early() {
+	echo "EXITED_EARLY after ${1}s: the window's command is no longer running. Window tail:" >&2
+	window_tail >&2
+	exit 1
+}
+
+if [ -z "$VERIFY" ]; then
+	elapsed=0
+	while [ "$elapsed" -lt "$WATCH" ]; do
+		sleep 1
+		elapsed=$((elapsed + 1))
+		check_ended "$elapsed" && exited_early "$elapsed"
+	done
+	echo "OPENED: still running after ${WATCH}s watch; no --verify given, cannot confirm completion"
+	exit 0
+fi
+
+echo "waiting up to ${TIMEOUT}s for the change to take effect…"
+elapsed=0
+while [ "$elapsed" -lt "$TIMEOUT" ]; do
+	if ( eval "$VERIFY" ) >/dev/null 2>&1; then
+		echo "VERIFIED after ${elapsed}s"
+		exit 0
+	fi
+	sleep 2
+	elapsed=$((elapsed + 2))
+	# a finished command that left the state unverified will not verify later
+	if check_ended "$elapsed"; then
+		( eval "$VERIFY" ) >/dev/null 2>&1 && { echo "VERIFIED after ${elapsed}s"; exit 0; }
+		exited_early "$elapsed"
+	fi
+done
+
+# Timeout is not proof of failure — the user may have walked away. Say which.
+echo "NOT_VERIFIED: still not in the expected state after ${TIMEOUT}s" >&2
+exit 1
