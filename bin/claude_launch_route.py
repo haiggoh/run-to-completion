@@ -182,7 +182,8 @@ def main(argv: list[str]) -> int:
         return 0
     if argv[0] == '--classify' and len(argv) == 2:
         try:
-            fx = json.load(open(argv[1]))
+            with open(argv[1]) as fh:
+                fx = json.load(fh)
         except (OSError, ValueError) as err:
             print(f'claude_launch_route: --classify {argv[1]!r}: {err}', file=sys.stderr)
             return 2
