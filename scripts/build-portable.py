@@ -68,6 +68,7 @@ COPY_FILES = [
     "skills/run-to-completion/SKILL.md",
     "skills/ship-config/SKILL.md",
     "skills/ship/SKILL.md",
+    "skills/terminal-handoff/SKILL.md",
     "skills/triage-for-autonomy/SKILL.md",
     "skills/ungate-queue/SKILL.md",
 ]
@@ -102,7 +103,7 @@ COMPONENTS = [
     {"path": "skills/", "kind": "skill",
      "adaptation_class": "mechanical", "evidence_level": "source-inspected",
      "surfaces": {"chat": True, "cowork": True, "code": True},
-     "notes": "the 9 workflow skills (triage/execute/close-out/ship/ship-config/...) — pure "
+     "notes": "the 9 workflow skills + terminal-handoff (its run-in-terminal / launch-claude-session commands are HOST-only: macOS Terminal.app, Code tab) (triage/execute/close-out/ship/ship-config/...) — pure "
               "guidance, portable on every surface; ${CLAUDE_PLUGIN_ROOT}/bin refs rewritten to scripts/"},
     {"path": "hooks/hooks.json", "kind": "hooks",
      "adaptation_class": "mechanical", "evidence_level": "source-inspected",

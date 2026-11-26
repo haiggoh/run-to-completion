@@ -55,7 +55,7 @@ def test_portable_manifest_same_name_no_bin():
 
 
 def test_host_to_portable_file_set_is_pinned():
-    """All 9 skills + both hooks + both shipper scripts, byte-identical (bin/ -> scripts/);
+    """All 10 skills + both hooks + both shipper scripts, byte-identical (bin/ -> scripts/);
     skill refs to this plugin's bin/rtc-ship.sh rewritten to scripts/ (soft — not every skill
     references it); generic <repo>/bin/rtc-ship.sh refs untouched."""
     import glob

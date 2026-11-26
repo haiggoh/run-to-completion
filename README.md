@@ -29,6 +29,7 @@ autonomy is just a script. Together they make "finished" mean the user already h
 | `run-to-completion` | offer | The original rule, for a plan already in view in the conversation: offer continuous execution, ask blocking matter-of-taste questions up front, fold mid-run prompts in at task seams. |
 | `ship` | attended | Ship ONE branch of ONE repo now: infers the worktree/branch from the current session (AskUserQuestion only on the default branch with unmerged branches, or outside any repo), derives version and title, then runs `bin/rtc-ship.sh` end to end and relays every phase verdict. For a whole queue unattended use `autopilot`. |
 | `ship-config` | attended | Inspect or change a repo's `rtc-ship.json`: shows what `--which-config` resolves today, asks which key and which value, validates, writes atomically, re-runs the version gate. For shipping a branch use `ship`. |
+| `terminal-handoff` | any time | Hands a step that needs a REAL terminal — a sudo or password prompt, an interactive login, a session the user should watch, a new interactive Claude session — to a Terminal.app window through `run-in-terminal` / `launch-claude-session`, and gets a **verified** verdict back. See [Real terminal windows](#real-terminal-windows). |
 
 **🚢 The ship tool, `rtc-ship.sh`.** This is the ship loop from `execute-unattended`
 turned into a script that cannot skip a step. One command takes a worktree through
@@ -439,10 +440,41 @@ These apps have no plugin marketplace. Open
 rule block into **Settings → Custom Instructions** (or a Project's instructions).
 The ship tool needs a shell, so it is available only in Claude Code.
 
+## Real terminal windows
+
+An agent's shell tool has no TTY and no screen, so a `sudo` prompt, an interactive login or a
+session the user should watch used to end in "please run this yourself and tell me". Two
+commands on PATH (macOS, Terminal.app) close that gap. Each opens a real window and reports a
+**checked** verdict, never just "a window opened":
+
+- **`run-in-terminal --command CMD --verify TEST [--label TEXT]`** runs `CMD` in a new window
+  (the user answers the prompt), then polls `TEST`: `VERIFIED` / `NOT_VERIFIED` /
+  `EXITED_EARLY` (with the window's last lines, tokens masked). If `TEST` already passes it
+  prints `ALREADY_SATISFIED` and opens nothing.
+- **`launch-claude-session [--prompt TEXT] [--lean] [-- claude flags]`** opens an interactive
+  Claude Code session and proves it `STARTED` (a new live session registered in that folder)
+  and `REPLIED` (its transcript gained an answer).
+
+The session's route is **learned, not configured**: the command walks the process tree to the
+calling `claude` and looks at its parent. A shell parent means a direct launch, so it inherits
+the caller's route variables, or uses plain `claude` when the caller is on a normal Anthropic
+login (checked with `claude auth status` in a clean environment). Any other parent is a
+launcher program, such as a gateway CLI; `--route launcher` re-runs its leading words, which
+picks its own key. The route (kind, launcher words, lane host, never a credential) is
+remembered with mode 0600 under `${CLAUDE_CONFIG_DIR:-~/.claude}/launch-claude-session/`, so a call from
+outside any session can reuse it. `launch-claude-session --route-info` shows both. Credentials
+travel in a 0600 file the window sources and deletes; they never reach a command line,
+Terminal history or output.
+
+Both commands support `--help`, and exit 2 on a usage error or an invalid override.
+
 ## Tests
 
 ```
 parallel --will-cite -j 12 bash ::: tests/test_*.sh   # every suite, in parallel (needs GNU parallel, jq)
+bash tests/test_run_in_terminal.sh                    # real-window runner, osascript stubbed
+bash tests/test_launch_claude_session.sh              # session launcher, routes + secrets
+bash tests/test_launch_route.sh                       # launch-route detection fixtures + live walk
 bash tests/test_nudge.sh                              # hook output contract
 bash tests/test_skills.sh                             # frontmatter + independence checks
 bash tests/test_ship_rehearsal.sh                     # the ship loop against a local origin

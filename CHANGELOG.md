@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.7.0] — 2026-11-26
+
+### Added — real terminal windows with a verified outcome
+
+- `run-in-terminal`: runs a command in a real Terminal.app window for steps that need a human
+  at a TTY (sudo or password prompts, interactive logins, pickers, TUIs) and reports
+  `VERIFIED` / `NOT_VERIFIED` / `EXITED_EARLY` by polling a `--verify` test; an already-true
+  state prints `ALREADY_SATISFIED` and opens nothing. The early-exit window tail masks
+  token-shaped strings.
+- `launch-claude-session`: opens an interactive Claude Code session and proves it `STARTED` and
+  `REPLIED`. The route is learned from the process tree instead of configured by name: it
+  inherits the caller's credentials by default, launches plain `claude` with nothing copied on a
+  normal Anthropic login, and with `--route launcher` re-runs the program that started the
+  calling session. The route is remembered (no credentials, mode 0600) for calls from outside
+  any session; `--route-info` shows it.
+- `terminal-handoff` skill plus one sentence in the SessionStart hint, so sessions know the
+  commands exist and never approximate a real window with a headless run.
+
 ## [1.6.4] — 2026-11-26
 
 ### Added — door refuses a CHANGELOG that lost or duplicated a released entry

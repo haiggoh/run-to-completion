@@ -60,5 +60,10 @@ case "$(ctx "$OUT")" in *"already up to date"*) r=0;; *) r=1;; esac; check $r "n
 # A release is conditional on purpose; an unconditional "always release" would be wrong.
 case "$(ctx "$OUT")" in *"when that is how a consumer"*) r=0;; *) r=1;; esac; check $r "nudge keeps the release step conditional"
 
+echo "== Case E: the nudge points at the real-terminal commands =="
+# The commands are only useful if every session knows they exist; this line is that surface.
+case "$(ctx "$OUT")" in *"run-in-terminal / launch-claude-session"*) r=0;; *) r=1;; esac; check $r "nudge names both real-terminal commands"
+case "$(ctx "$OUT")" in *"never approximate them with a headless"*) r=0;; *) r=1;; esac; check $r "nudge forbids the headless look-alike"
+
 echo; echo "PASS=$pass FAIL=$fail"
 [ "$fail" -eq 0 ]
