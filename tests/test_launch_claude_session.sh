@@ -11,6 +11,9 @@ pass=0; fail=0
 check() { if [ "$1" -eq 0 ]; then echo "  PASS: $2"; pass=$((pass+1)); else echo "  FAIL: $2"; fail=$((fail+1)); fi; }
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 export CLAUDE_CONFIG_DIR="$TMP/conf"; mkdir -p "$CLAUDE_CONFIG_DIR/sessions" "$TMP/work"
+# a temp Claude config: pre-trust writes HERE, never to the real ~/.claude.json
+CFG="$CLAUDE_CONFIG_DIR/.claude.json"; echo '{"projects":{}}' > "$CFG"
+trusted() { python3 -c 'import json,os,sys; d=json.load(open(sys.argv[1])); print((d.get("projects",{}).get(os.path.realpath(sys.argv[2])) or {}).get("hasTrustDialogAccepted"))' "$CFG" "$1"; }
 LEARNED="$CLAUDE_CONFIG_DIR/launch-claude-session/launch-route.json"
 SECRET='sk-planted-0123456789abcdef'
 
@@ -166,6 +169,24 @@ r=0; [ "$(rc seam)" = 2 ] || r=1; check $r "LCS_TEST_LOGIN_CLEAN=false wins over
 lcs dash wrap false yes --dry-run --route launcher --prompt=-x -- --effort high
 r=0; grep -qF 'gw agent claude -- --effort high -- "$(cat <prompt file>)"' "$TMP/dash.out" || r=1
 check $r "launcher route: the prompt is separated from claude flags by --"
+
+echo "== pre-trust (an untrusted folder stalls the session at the trust prompt) =="
+mkdir -p "$TMP/w-trust" "$TMP/w-notrust" "$TMP/w-dry"
+clean_sessions
+( export FAKE_DRV_CWD="$TMP/w-trust"; lcs pt1 wrap false yes --cwd "$TMP/w-trust" --start-timeout 5 )
+r=0; grep -q '^PRE_TRUSTED' "$TMP/pt1.out" && [ "$(trusted "$TMP/w-trust")" = True ] || r=1; check $r "the target folder is pre-trusted before the window opens"
+r=0; ls "$CFG".bak.pre-trust-* > /dev/null 2>&1 || r=1; check $r "the config is backed up before the trust write"
+clean_sessions; ( export FAKE_DRV_CWD="$TMP/w-trust"; lcs pt2 wrap false yes --cwd "$TMP/w-trust" --start-timeout 5 )
+grep -q '^ALREADY_TRUSTED' "$TMP/pt2.out"; check $? "a trusted folder reports ALREADY_TRUSTED"
+clean_sessions; ( export FAKE_DRV_CWD="$TMP/w-notrust"; lcs pt3 wrap false yes --cwd "$TMP/w-notrust" --start-timeout 5 --no-pre-trust )
+r=0; [ "$(trusted "$TMP/w-notrust")" = None ] || r=1; check $r "--no-pre-trust leaves the folder untouched"
+lcs pt4 wrap false yes --cwd "$TMP/w-dry" --dry-run
+r=0; grep -q 'pre-trust' "$TMP/pt4.out" && [ "$(trusted "$TMP/w-dry")" = None ] || r=1; check $r "--dry-run reports the pre-trust and writes nothing"
+cp "$CFG" "$CFG.good"; echo 'not json' > "$CFG"
+clean_sessions; ( export FAKE_DRV_CWD="$TMP/w-dry"; lcs pt5 wrap false yes --cwd "$TMP/w-dry" --start-timeout 5 )
+r=0; [ "$(rc pt5)" = 1 ] && out pt5 | grep -q -- '--no-pre-trust' && ! grep -q '^STARTED' "$TMP/pt5.out" || r=1
+check $r "a failed trust write stops before the window, naming --no-pre-trust"
+mv "$CFG.good" "$CFG"
 
 echo
 echo "launch-claude-session: $pass passed, $fail failed"

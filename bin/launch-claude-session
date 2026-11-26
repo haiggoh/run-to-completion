@@ -31,6 +31,7 @@ Options:
   --start-timeout S    seconds to wait for the session to register (default 90)
   --wait-reply S       after start, seconds to wait for the first reply when a prompt was given
                        (default 180; 0 = do not wait)
+  --no-pre-trust       do not pre-accept folder trust for --cwd (see "Folder trust" below)
   --dry-run            print the window command and inherited variable NAMES, open nothing
   -h, --help           show this help and exit (nothing is run, nothing is learned)
 
@@ -41,6 +42,13 @@ another program (a launcher). Each run inside a session records the route — ki
 words, lane host, never a credential — in
   ${CLAUDE_CONFIG_DIR:-~/.claude}/launch-claude-session/launch-route.json  (mode 0600)
 so a later call from outside any session (a plain terminal, a scheduled job) can reuse it.
+
+Folder trust: a session in a folder Claude Code has not trusted yet stops at the trust prompt,
+never registers, and the launch reads as NOT_STARTED. So by default the --cwd folder is
+pre-trusted first (PRE_TRUSTED / ALREADY_TRUSTED): exactly one field,
+projects[<realpath>].hasTrustDialogAccepted, is set in the Claude config (backup first,
+verified by re-read; see claude_pre_trust.py --help). The home folder is skipped (its trust is
+never persisted). A failed trust write stops before any window opens (exit 1).
 
 Credentials never appear on a command line, in Terminal history or in output: inherited
 values go to a 0600 temp file the window sources and deletes before claude starts.
@@ -81,6 +89,7 @@ import time
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, HERE)
 lr = importlib.import_module('claude_launch_route')  # sibling module, resolved from this file (not PATH)
+pt = importlib.import_module('claude_pre_trust')     # sibling: the one sanctioned trust writer
 
 CONF = os.environ.get('CLAUDE_CONFIG_DIR') or os.path.join(os.path.expanduser('~'), '.claude')
 SESSIONS = os.path.join(CONF, 'sessions')
@@ -112,6 +121,7 @@ def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     p.add_argument('--label', default='start a Claude Code session')
     p.add_argument('--start-timeout', type=int, default=90)
     p.add_argument('--wait-reply', type=int, default=180)
+    p.add_argument('--no-pre-trust', action='store_true')
     p.add_argument('--dry-run', action='store_true')
     p.add_argument('--check-started', nargs=2, metavar=('MARKER', 'CWD'), help=argparse.SUPPRESS)
     try:
@@ -294,6 +304,21 @@ def resolve(a: argparse.Namespace, route: lr.Route, inherited: dict[str, str]) -
     return 'login', None
 
 
+def pre_trust_folder(cwd: str, dry_run: bool) -> None:
+    """Pre-accept folder trust so the session cannot stall at the trust prompt."""
+    res = pt.pre_trust(cwd, dry_run=dry_run)
+    if dry_run:
+        print(f'pre-trust (dry run): {res.reason}')
+    elif res.exit_code == 0:
+        print(('ALREADY_TRUSTED ' if res.already else 'PRE_TRUSTED ') + res.target)
+    elif res.exit_code == 3:
+        print(f'NOTICE: pre-trust skipped ({res.reason}); answer the trust prompt in the window if it appears')
+    else:
+        print(f'PRE_TRUST_FAILED: {res.reason} — no window opened (pass --no-pre-trust to answer the '
+              'trust prompt in the window yourself)', file=sys.stderr)
+        sys.exit(1)
+
+
 def main() -> None:
     a, extra = parse(sys.argv[1:])
     if a.help:
@@ -339,6 +364,8 @@ def main() -> None:
 
     inherited = {k: v for k, v in os.environ.items() if lr.CREDENTIAL_VARS.match(k)}
     mode, words = resolve(a, route, inherited)
+    if not a.no_pre_trust:
+        pre_trust_folder(cwd, a.dry_run)
     flags = (['--strict-mcp-config'] if a.lean else []) \
         + (['--settings', os.path.realpath(os.path.expanduser(lean_settings))] if a.lean and lean_settings else []) \
         + [x for d in a.plugin_dir for x in ('--plugin-dir', os.path.realpath(os.path.expanduser(d)))] + extra

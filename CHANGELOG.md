@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.7.1] — 2026-11-26
+
+### Fixed — a launch into an untrusted folder no longer stalls at the trust prompt
+
+- `launch-claude-session` now pre-trusts its `--cwd` folder before opening the window
+  (`PRE_TRUSTED` / `ALREADY_TRUSTED`). A session in a folder Claude Code had not trusted yet
+  stopped at the trust prompt, never registered, and the launch timed out as `NOT_STARTED`
+  (found dogfooding 1.7.0 on the launcher route). The writer, `bin/claude_pre_trust.py`, is
+  vendored from the free-agents plugin's probed and reviewed helper: it sets exactly one field,
+  `projects[<realpath>].hasTrustDialogAccepted`, after a backup, and verifies it by re-read.
+  `--no-pre-trust` opts out; `--dry-run` writes nothing; a failed trust write opens no window.
+
 ## [1.7.0] — 2026-11-26
 
 ### Added — real terminal windows with a verified outcome

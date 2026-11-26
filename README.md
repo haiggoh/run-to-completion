@@ -466,6 +466,10 @@ outside any session can reuse it. `launch-claude-session --route-info` shows bot
 travel in a 0600 file the window sources and deletes; they never reach a command line,
 Terminal history or output.
 
+Before opening the window, `launch-claude-session` pre-trusts the target folder (one field in the
+Claude config, backed up and verified; `--no-pre-trust` opts out), because a session in an
+untrusted folder stops at the trust prompt and never registers.
+
 Both commands support `--help`, and exit 2 on a usage error or an invalid override.
 
 ## Tests

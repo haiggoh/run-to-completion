@@ -44,6 +44,9 @@ tty, never a parallel one), then `REPLIED` when a prompt was given and a real re
 an API error does not count (exit 0). `NOT_STARTED`, `NO_REPLY`, `SESSION_EXITED` (exit 1). A window that opened proves
 nothing — report the verdict line, not "launched".
 
+The target folder is pre-trusted first (`PRE_TRUSTED` / `ALREADY_TRUSTED`), so the window cannot
+stall at Claude Code's trust prompt; `--no-pre-trust` leaves that prompt to the user.
+
 Default is the FULL session (MCP servers, plugins, settings). Use `--lean` only when the user
 wants a session without MCP servers.
 
