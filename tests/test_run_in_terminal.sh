@@ -74,6 +74,10 @@ check $r "--verify sees RIT_WINDOW_ID/RIT_WINDOW_TTY; WINDOW_TTY is printed"
 run ttypre --command 'echo hi' --verify '[ -n "$RIT_WINDOW_TTY" ]' --timeout 6
 r=0; grep -q ALREADY_SATISFIED "$TMP/ttypre.out" && r=1; check $r "the no-window pre-check sees no window tty (cannot ALREADY_SATISFY a window test)"
 
+run nl --command 'echo hi' --verify false --timeout 2 --label "$(printf 'two\nlines\tand tab')"
+r=0; grep -qF '=== Claude opened this window to two lines and tab ===' "$TMP/nl.osa" || r=1
+check $r "control characters in --label become spaces (cannot break the AppleScript literal)"
+
 echo "== non-darwin =="
 FAKE_UNAME=Linux run lin --command 'echo hi'
 r=0; [ "$(rc lin)" = 2 ] && grep -q 'needs macOS Terminal.app' "$TMP/lin.err" && [ ! -e "$TMP/lin.osa" ] || r=1
