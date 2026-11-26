@@ -4,6 +4,7 @@
 #   "do script"   -> append the script to $FAKE_OSA_LOG, print a window id (42)
 #   "get busy"    -> print the first line of $FAKE_OSA_BUSY (consumed; default "true");
 #                    on the first busy read, touch $FAKE_OSA_TOUCH when it is set
+#   "get tty"     -> /dev/ttys0FAKE
 #   "get history" -> cat $FAKE_OSA_HISTORY
 # Env: FAKE_OSA_LOG, FAKE_OSA_BUSY, FAKE_OSA_TOUCH, FAKE_OSA_HISTORY (all optional).
 set -u
@@ -21,6 +22,8 @@ case "$script" in
 		else
 			echo true
 		fi ;;
+	*"get tty"*)
+		echo /dev/ttys0FAKE ;;
 	*"get history"*)
 		[ -n "${FAKE_OSA_HISTORY:-}" ] && cat "$FAKE_OSA_HISTORY" ;;
 	*) echo "fake osascript: unhandled script" >&2; exit 1 ;;

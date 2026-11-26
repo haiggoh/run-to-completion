@@ -51,6 +51,17 @@ r=0; has unsafe 'sk-ABC' && r=1; check $r "the unsafe token is never printed"
 fx out "{\"ancestry\":[$LOGIN,$TERM_APP],\"env\":{},\"logged_in_clean\":true}"; cls out
 r=0; has out 'inside_session=False' && has out 'kind=login' || r=1; check $r "no claude ancestor => outside a session"
 
+echo "== review fixes: route variables without a token, script launchers =="
+fx url "{\"ancestry\":[$SH,$CL,$LOGIN],\"env\":{\"ANTHROPIC_BASE_URL\":\"http://localhost:4141\"},\"logged_in_clean\":true}"; cls url
+r=0; has url 'kind=env' && has url 'lane=localhost:4141' || r=1; check $r "a base URL alone (token-less local proxy) is an env route, not login"
+fx oat "{\"ancestry\":[$SH,$CL,$LOGIN],\"env\":{\"CLAUDE_CODE_OAUTH_TOKEN\":\"x\"},\"logged_in_clean\":false}"; cls oat
+has oat 'kind=env'; check $? "CLAUDE_CODE_OAUTH_TOKEN counts as a route variable"
+SCRIPT="$TMP/a-rather-long-launcher-script-name-for-testing/gw-claude"; mkdir -p "$(dirname "$SCRIPT")"; : > "$SCRIPT"
+fx scr "{\"ancestry\":[$SH,$CL,{\"pid\":34,\"comm\":\"/bin/bash\",\"args\":[\"/bin/bash\",\"$SCRIPT\",\"--pick\"]},$LOGIN],\"env\":$CREDS,\"logged_in_clean\":false}"; cls scr
+r=0; has scr 'kind=wrapper' && has scr "launcher=$SCRIPT" || r=1; check $r "a shell RUNNING A SCRIPT is a launcher; the existing script path is kept"
+fx shc "{\"ancestry\":[$SH,$CL,{\"pid\":35,\"comm\":\"/bin/zsh\",\"args\":[\"/bin/zsh\",\"-l\"]},$LOGIN],\"env\":$CREDS,\"logged_in_clean\":false}"; cls shc
+has shc 'kind=env'; check $? "an interactive shell with flags only is still direct"
+
 echo "== live collector (read-only, no output of argv) =="
 # Any real process tree has >= 2 ancestors; a ps header mis-parse once stopped the walk at 1
 # while every fixture above stayed green (2026-11-26).

@@ -100,12 +100,12 @@
     "skills/run-to-completion/SKILL.md": "4e8ec36172b1e659427902d66c1b984d026be2733433d0c26457b3efb280d698",
     "skills/ship-config/SKILL.md": "4f2d39ffc6b50f8399e4591e10f1cb944a14b784a137b0685f355d7628914d71",
     "skills/ship/SKILL.md": "460a6f7fef935d9a084c21cec38ab1ca21fe35261a1bf4f1e67cd6aabd8fb17d",
-    "skills/terminal-handoff/SKILL.md": "9293ed95fb7462860d8cb5758c1f425f18bf2f2483a99d2030eeb4b895b9e704",
+    "skills/terminal-handoff/SKILL.md": "6a754f0cf033c3a8322ab4b7df615b9c0dab09d9443df505f1cc6d12726cdebe",
     "skills/triage-for-autonomy/SKILL.md": "ad8acd73bfe3018711658bbb9f710e253b41011ef654ba0b376c36315ea77790",
     "skills/ungate-queue/SKILL.md": "aa49963534e95785908b87d25d7739b0c5a95f5b1c6c9b11a2e53fe8d0e652e4"
   },
   "schema": "haiggoh-portable-build/1",
-  "source_commit": "a5e5cf018bf8e42e4ed5565298afd0cc1a04f823",
+  "source_commit": "4ac987da58df584bae73b490d0d266adfbd2190e",
   "source_repo": "haiggoh/run-to-completion",
   "transform_version": "1"
 }

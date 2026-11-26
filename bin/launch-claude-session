@@ -12,7 +12,8 @@ Options:
   --route auto|inherit|launcher|login
                        auto (default): inside a Claude session, INHERIT its credentials (a
                        normal Anthropic login needs none: plain `claude`); outside any session,
-                       use the learned launcher, else the login. See "Routes" below.
+                       the shell's own route variables if set, else the learned launcher, else
+                       the login. See "Routes" below.
                        inherit: copy this shell's route/credential variables into the window.
                        launcher: re-run the detected (or learned) launcher program, e.g. a
                        gateway CLI that started this session; it picks its own key.
@@ -24,6 +25,7 @@ Options:
   --cwd DIR            directory the session starts in (default: the current directory)
   --plugin-dir DIR     load a plugin from DIR for this session (repeatable)
   --prompt TEXT        first user message, sent automatically (interactive session, not -p)
+                       (a prompt starting with '-' must be written --prompt=-TEXT)
   --prompt-file FILE   same, read from FILE
   --label TEXT         banner text shown in the window
   --start-timeout S    seconds to wait for the session to register (default 90)
@@ -45,8 +47,11 @@ values go to a 0600 temp file the window sources and deletes before claude start
 
 How it verifies (an opened window proves nothing):
   STARTED   a NEW <config>/sessions/<pid>.json (newer than launch) with this cwd, kind
-            interactive, live pid — `STARTED pid=<pid> session=<id> route=… lane=<host>`
-  REPLIED   that session's transcript gained an assistant record — the route works
+            interactive, a live pid ON THE OPENED WINDOW'S TTY (so a parallel session in the
+            same folder is never mistaken for it) — `STARTED pid=… session=… route=… lane=…`
+  REPLIED   that session's transcript gained a REAL assistant reply (API-error records, which
+            Claude Code also writes as assistant records, do not count) — the route works
+A failure of the window driver itself (e.g. no Automation permission) is shown verbatim.
 Exit codes: 0 verified (STARTED, and REPLIED when a reply was awaited) · 1 NOT_STARTED /
 NO_REPLY / SESSION_EXITED · 2 usage error, invalid override, or no usable route.
 
@@ -58,6 +63,8 @@ Environment variables read:
   LCS_TEST_ANCESTRY_JSON  file with a process-ancestry list replacing the live process tree
   LCS_TEST_LOGIN_CLEAN    true|false replacing the clean `claude auth status` probe
   LCS_TEST_DRIVER         executable used instead of the sibling run-in-terminal
+  LCS_TEST_TTY_MAP        pid:tty[,pid:tty...] replacing the live tty lookup of a session pid
+  CLAUDE_CONFIG_DIR, when set, is carried into the window on every route (a path, not a secret).
 """
 import argparse
 import glob
@@ -102,7 +109,7 @@ def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     p.add_argument('--plugin-dir', action='append', default=[])
     p.add_argument('--prompt')
     p.add_argument('--prompt-file')
-    p.add_argument('--label', default='launch-claude-session')
+    p.add_argument('--label', default='start a Claude Code session')
     p.add_argument('--start-timeout', type=int, default=90)
     p.add_argument('--wait-reply', type=int, default=180)
     p.add_argument('--dry-run', action='store_true')
@@ -113,6 +120,8 @@ def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
         die('bad arguments (see --help)')
     if unknown:
         die(f'unknown argument(s): {" ".join(unknown)} (claude flags go after a bare --; see --help)')
+    if a.start_timeout <= 0 or a.wait_reply < 0:
+        die('--start-timeout must be > 0 and --wait-reply >= 0 (seconds)')
     if a.route not in ROUTES:
         die(f'--route {a.route!r}: expected one of {", ".join(ROUTES)}')
     return a, extra
@@ -146,7 +155,11 @@ def read_learned() -> dict | None:
 
 
 def write_learned(route: lr.Route) -> None:
-    """Record the route (no credentials) for calls from outside any session."""
+    """Record a USABLE launcher (no credentials) for calls from outside any session. Only a
+    wrapper with safe launcher words is recorded: a later direct or unsafe-wrapper run must not
+    erase the last good launcher."""
+    if route.kind != 'wrapper' or not route.launcher:
+        return
     os.makedirs(os.path.dirname(LEARNED), exist_ok=True)
     data = {'kind': route.kind, 'launcher': route.launcher, 'launcher_name': route.launcher_name,
             'lane': route.lane, 'learned_at': time.strftime('%Y-%m-%dT%H:%M:%S%z')}
@@ -158,8 +171,29 @@ def write_learned(route: lr.Route) -> None:
     os.replace(tmp, LEARNED)
 
 
-def started_session(marker: float, cwd: str) -> dict | None:
-    """The live interactive session registered after `marker` in `cwd`, or None."""
+def _tty_name(t: str) -> str:
+    return t.strip().removeprefix('/dev/')
+
+
+def tty_of(pid: int) -> str:
+    """The controlling tty of `pid` (e.g. ttys012), '' when none."""
+    seam = os.environ.get('LCS_TEST_TTY_MAP')
+    if seam is not None:
+        try:
+            return dict(x.split(':', 1) for x in seam.split(',') if x).get(str(pid), '')
+        except ValueError:
+            die(f'LCS_TEST_TTY_MAP={seam!r}: expected pid:tty[,pid:tty...]')
+    out = subprocess.run(['ps', '-o', 'tty=', '-p', str(pid)], capture_output=True, text=True, check=False,
+                         env={**os.environ, 'LC_ALL': 'C'}).stdout.strip()
+    return '' if out in ('', '??', '-') else _tty_name(out)
+
+
+def started_session(marker: float, cwd: str, window_tty: str) -> dict | None:
+    """The live interactive session registered after `marker` in `cwd` on `window_tty`, or None.
+    No window tty (the driver's no-window pre-check) never matches."""
+    want_tty = _tty_name(window_tty)
+    if not want_tty:
+        return None
     want = os.path.realpath(cwd)
     for f in glob.glob(os.path.join(SESSIONS, '*.json')):
         if os.path.getmtime(f) <= marker:
@@ -172,6 +206,8 @@ def started_session(marker: float, cwd: str) -> dict | None:
             if os.path.realpath(d.get('cwd', '')) != want:
                 continue
             os.kill(int(d['pid']), 0)
+            if tty_of(int(d['pid'])) != want_tty:
+                continue
         except (OSError, ValueError, KeyError, TypeError):  # half-written or dead session file: skip
             continue
         return d
@@ -182,10 +218,18 @@ def transcript_of(cwd: str, session_id: str) -> str:
     return os.path.join(PROJECTS, re.sub(r'[^A-Za-z0-9]', '-', os.path.realpath(cwd)), f'{session_id}.jsonl')
 
 
+def is_real_reply(rec: dict) -> bool:
+    """An assistant record from the model — not one of Claude Code's synthetic API-error records."""
+    if rec.get('type') != 'assistant' or rec.get('isApiErrorMessage'):
+        return False
+    msg = rec.get('message')
+    return not (isinstance(msg, dict) and msg.get('model') == '<synthetic>')
+
+
 def has_reply(path: str) -> bool:
     try:
         with open(path) as fh:
-            return any(json.loads(line).get('type') == 'assistant' for line in fh if line.strip())
+            return any(is_real_reply(json.loads(line)) for line in fh if line.strip())
     except (OSError, ValueError):
         return False
 
@@ -209,26 +253,28 @@ def launcher_of(route: lr.Route, learned: dict | None) -> list[str] | None:
 
 def resolve(a: argparse.Namespace, route: lr.Route, inherited: dict[str, str]) -> tuple[str, list[str] | None]:
     """(mode, launcher words) for the requested route; dies with the fix when unusable."""
-    has_creds = any(inherited.get(k) for k in lr.HAS_CREDENTIAL)
+    has_creds = lr.has_route(inherited)
     learned = read_learned()
     want = a.route
     if want == 'auto':
         if route.inside_session and route.kind in ('wrapper', 'env'):
             want = 'inherit' if has_creds else 'launcher'
-        elif route.kind == 'env':
-            want = 'inherit'
-        elif route.kind == 'login':
+        elif route.inside_session and route.kind == 'login':
             want = 'login'
+        elif route.kind == 'env':                                   # outside: the shell's own route first
+            want = 'inherit'
         elif not route.inside_session and launcher_of(route, learned):
-            want = 'launcher'
+            want = 'launcher'                                       # then the learned launcher
+        elif route.kind == 'login':
+            want = 'login'                                          # then the normal login
         else:
             die('no usable route: this shell has no Claude credentials, no launcher was detected or '
                 f'learned ({LEARNED}), and a plain `claude` is not logged in — run `claude auth login`, '
                 'or call this from inside the session whose route the window should use')
     if want == 'inherit':
         if not has_creds:
-            die('--route inherit: this shell has no Claude credentials to inherit (no ANTHROPIC_AUTH_TOKEN/'
-                'API_KEY or cloud-provider switch)')
+            die('--route inherit: this shell has no Claude route variables to inherit (ANTHROPIC_*, '
+                'CLAUDE_CODE_USE_*, CLAUDE_CODE_OAUTH_TOKEN)')
         return 'inherit', None
     if want == 'launcher':
         words = launcher_of(route, learned)
@@ -239,7 +285,9 @@ def resolve(a: argparse.Namespace, route: lr.Route, inherited: dict[str, str]) -
             print(f'NOTICE: the calling session was not started by a launcher ({route.kind}); '
                   f'using the learned launcher `{" ".join(words)}`, which picks its own key')
         return 'launcher', words
-    if route.kind != 'login' and not (os.environ.get('LCS_TEST_LOGIN_CLEAN') == 'true' or lr.probe_login_clean()):
+    seam = os.environ.get('LCS_TEST_LOGIN_CLEAN')
+    logged_in = (seam == 'true') if seam is not None else lr.probe_login_clean()
+    if route.kind != 'login' and not logged_in:
         die('--route login: a plain `claude` is not logged in (run `claude auth login`)')
     if route.kind in ('wrapper', 'env'):
         print(f'NOTICE: --route login differs from the calling route ({route.kind}); launching on the normal login')
@@ -252,7 +300,8 @@ def main() -> None:
         print(__doc__)
         sys.exit(0)
     if a.check_started:  # the driver's --verify predicate
-        sys.exit(0 if started_session(os.path.getmtime(a.check_started[0]), a.check_started[1]) else 1)
+        sys.exit(0 if started_session(os.path.getmtime(a.check_started[0]), a.check_started[1],
+                                      os.environ.get('RIT_WINDOW_TTY', '')) else 1)
     if a.prompt is not None and a.prompt_file:
         die('give --prompt or --prompt-file, not both')
     lean_settings = os.environ.get('LAUNCH_CLAUDE_LEAN_SETTINGS')
@@ -299,18 +348,21 @@ def main() -> None:
     else:
         argv = ['claude'] + flags
         lane = route.lane if mode == 'inherit' else 'anthropic-login'
-    prompt_sep = '' if mode == 'launcher' else ' --'
+    # claude reads the prompt as a positional: guard it with -- unless the launcher's own -- already
+    # directly precedes it (a prompt starting with '-' would otherwise read as a flag)
+    prompt_sep = '' if mode == 'launcher' and not flags else ' --'
+    conf_part = f'export CLAUDE_CONFIG_DIR={shlex.quote(os.environ["CLAUDE_CONFIG_DIR"])} && ' if os.environ.get('CLAUDE_CONFIG_DIR') else ''
 
     if a.dry_run:
         env_part = '. <0600 env file> && rm -f <it> && ' if mode == 'inherit' else ''
         prompt_part = f'{prompt_sep} "$(cat <prompt file>)"' if prompt else ''
-        print(f'{env_part}cd {shlex.quote(cwd)} && ' + ' '.join(shlex.quote(x) for x in argv) + prompt_part)
+        print(f'{env_part}{conf_part}cd {shlex.quote(cwd)} && ' + ' '.join(shlex.quote(x) for x in argv) + prompt_part)
         if mode == 'inherit':
             print('inherits:', ' '.join(sorted(inherited)), f'(lane {lane})')
         sys.exit(0)
 
     temp_files: list[str] = []
-    cmd = f'cd {shlex.quote(cwd)} && ' + ' '.join(shlex.quote(x) for x in argv)
+    cmd = f'{conf_part}cd {shlex.quote(cwd)} && ' + ' '.join(shlex.quote(x) for x in argv)
     if prompt:
         temp_files.append(private_file('launch-claude-session-prompt-', prompt))
         cmd += f'{prompt_sep} "$(cat {shlex.quote(temp_files[-1])})"'
@@ -325,12 +377,13 @@ def main() -> None:
     temp_files.append(marker)
     verify = f'{shlex.quote(os.path.realpath(__file__))} --check-started {shlex.quote(marker)} {shlex.quote(cwd)}'
     s = None
-    drv_err = ''
+    drv: subprocess.CompletedProcess[str] | None = None
+    window_tty = ''
     try:
         drv = subprocess.run([driver, '--label', a.label, '--timeout', str(a.start_timeout), '--verify', verify, '--command', cmd],
                              capture_output=True, text=True, check=False)
-        drv_err = drv.stderr
-        s = started_session(os.path.getmtime(marker), cwd)
+        window_tty = next((ln.split('=', 1)[1] for ln in drv.stdout.splitlines() if ln.startswith('WINDOW_TTY=')), '')
+        s = started_session(os.path.getmtime(marker), cwd, window_tty)
     finally:
         # The window deletes the env file when it sources it; a window that never got that far
         # (parse error, early exit, timeout) must not leave credentials on disk.
@@ -340,10 +393,16 @@ def main() -> None:
             except OSError:
                 pass
     if s is None:
-        early = [ln for ln in drv_err.splitlines() if ln.startswith(('EXITED_EARLY', '  |'))]
+        err = drv.stderr if drv else ''
+        early = [ln for ln in err.splitlines() if ln.startswith(('EXITED_EARLY', '  |'))]
         if early:
             print('\n'.join(early))
-        print(f'NOT_STARTED: no new interactive session in {cwd} within {a.start_timeout}s')
+        elif drv and drv.returncode != 0 and err.strip():
+            print(err.rstrip())                                     # the driver's own reason, verbatim
+        if drv and drv.returncode == 2:
+            sys.exit(2)                                             # a usage error is not a "not started"
+        print(f'NOT_STARTED: no new interactive session on this window (tty {window_tty or "unknown"}) '
+              f'in {cwd} within {a.start_timeout}s')
         sys.exit(1)
     print(f'STARTED pid={s["pid"]} session={s["sessionId"]} route={mode}{"+lean" if a.lean else ""} lane={lane}')
     if not prompt or a.wait_reply <= 0:

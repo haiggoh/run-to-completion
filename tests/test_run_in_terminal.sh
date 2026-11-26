@@ -63,6 +63,17 @@ r=0; [ "$erc" = 1 ] && grep -q '^EXITED_EARLY' "$TMP/early.err" || r=1; check $r
 r=0; grep -q 'sk-<masked>' "$TMP/early.err" && ! grep -q 'sk-abcdef1234567890XYZ' "$TMP/early.err" || r=1
 check $r "the window tail masks token-shaped strings"
 
+echo "== review fixes: env hygiene, timeout, window identity for --verify =="
+WATCH=abc run wenv --command 'echo hi' --verify true
+r=0; [ "$(rc wenv)" = 0 ] && grep -q ALREADY_SATISFIED "$TMP/wenv.out" || r=1; check $r "an exported WATCH does not change behaviour"
+run tmo --command 'echo hi' --timeout ''
+r=0; [ "$(rc tmo)" = 2 ] && [ ! -e "$TMP/tmo.osa" ] || r=1; check $r "--timeout '' exits 2 before opening a window"
+run tty --command 'echo hi' --verify '[ "$RIT_WINDOW_ID" = 42 ] && [ "$RIT_WINDOW_TTY" = /dev/ttys0FAKE ]' --timeout 6
+r=0; [ "$(rc tty)" = 0 ] && grep -q '^VERIFIED' "$TMP/tty.out" && grep -q '^WINDOW_TTY=/dev/ttys0FAKE' "$TMP/tty.out" || r=1
+check $r "--verify sees RIT_WINDOW_ID/RIT_WINDOW_TTY; WINDOW_TTY is printed"
+run ttypre --command 'echo hi' --verify '[ -n "$RIT_WINDOW_TTY" ]' --timeout 6
+r=0; grep -q ALREADY_SATISFIED "$TMP/ttypre.out" && r=1; check $r "the no-window pre-check sees no window tty (cannot ALREADY_SATISFY a window test)"
+
 echo "== non-darwin =="
 FAKE_UNAME=Linux run lin --command 'echo hi'
 r=0; [ "$(rc lin)" = 2 ] && grep -q 'needs macOS Terminal.app' "$TMP/lin.err" && [ ! -e "$TMP/lin.osa" ] || r=1

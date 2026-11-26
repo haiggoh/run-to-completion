@@ -34,10 +34,17 @@ from typing import TypedDict
 from urllib.parse import urlparse
 
 # The variables that decide which gateway, key, model and cloud a session talks to.
-CREDENTIAL_VARS = re.compile(r'^(ANTHROPIC_[A-Z0-9_]+|CLAUDE_CODE_USE_(VERTEX|BEDROCK|FOUNDRY)|CLOUD_ML_REGION|VERTEX_REGION_[A-Z0-9_]+|OPENAI_[A-Z0-9_]+|AWS_(REGION|PROFILE|ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN))$')
-HAS_CREDENTIAL = ('ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_FOUNDRY')
+CREDENTIAL_VARS = re.compile(r'^(ANTHROPIC_[A-Z0-9_]+|CLAUDE_CODE_USE_(VERTEX|BEDROCK|FOUNDRY)|CLAUDE_CODE_OAUTH_TOKEN|CLOUD_ML_REGION|VERTEX_REGION_[A-Z0-9_]+|OPENAI_[A-Z0-9_]+|AWS_(REGION|PROFILE|ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN))$')
+# A Claude ROUTE is set when any of these is non-empty — not only a token: a token-less local
+# proxy is just ANTHROPIC_BASE_URL, and dropping it would swap a $0 local lane for a paid one.
+ROUTE_VARS = re.compile(r'^(ANTHROPIC_[A-Z0-9_]+|CLAUDE_CODE_USE_(VERTEX|BEDROCK|FOUNDRY)|CLAUDE_CODE_OAUTH_TOKEN)$')
+
+
+def has_route(env: dict[str, str]) -> bool:
+    return any(v for k, v in env.items() if ROUTE_VARS.match(k))
 
 SHELLS = {'sh', 'bash', 'zsh', 'fish', 'dash', 'ksh', 'tcsh', 'csh', 'login', 'tmux', 'screen'}
+SCRIPT_SHELLS = {'sh', 'bash', 'zsh', 'fish', 'dash', 'ksh'}   # `bash some-launcher` is a launcher
 TRANSPARENT = {'env', 'nohup', 'caffeinate', 'arch', 'time', 'sudo'}
 SAFE_WORD = re.compile(r'^[A-Za-z0-9._/-]{1,40}$')
 KEY_SHAPED = re.compile(r'^(sk-|ghp_|gho_|eyJ)|[A-Za-z0-9+/_=-]{32,}')
@@ -75,7 +82,13 @@ def _is_claude(p: Proc) -> bool:
     return b == 'node' and any(a.endswith('/claude') or 'claude-code' in a for a in p['args'][1:])
 
 
+def _runs_script(p: Proc) -> bool:
+    return _base(p['comm']) in SCRIPT_SHELLS and len(p['args']) > 1 and not p['args'][1].startswith('-')
+
+
 def _is_direct(p: Proc) -> bool:
+    if _runs_script(p):
+        return False
     return _base(p['comm']) in SHELLS or '.app/Contents/MacOS/' in p['comm']
 
 
@@ -88,12 +101,19 @@ def lane_of(env: dict[str, str]) -> str:
     return 'anthropic-default'
 
 
+def _existing_file(a: str) -> bool:
+    return '/' in a and len(a) <= 300 and not any(c.isspace() for c in a) and os.path.isfile(a)
+
+
 def launcher_words(args: list[str]) -> list[str] | None:
     """Leading words up to the first flag; None when any kept word is not plainly safe."""
     words: list[str] = []
     for a in args:
         if a.startswith('-'):
             break
+        if _existing_file(a):            # a real script path is not a secret, whatever its length
+            words.append(a)
+            continue
         if not SAFE_WORD.match(a) or KEY_SHAPED.search(a):
             return None
         words.append(a)
@@ -102,14 +122,14 @@ def launcher_words(args: list[str]) -> list[str] | None:
 
 def classify(ancestry: list[Proc], env: dict[str, str], logged_in_clean: bool | None) -> Route:
     route_env = {k: v for k, v in env.items() if CREDENTIAL_VARS.match(k)}
-    has_creds = any(route_env.get(k) for k in HAS_CREDENTIAL)
+    has_creds = has_route(route_env)
     lane = lane_of(route_env)
     idx = next((i for i, p in enumerate(ancestry) if _is_claude(p)), None)
     parent = None
     if idx is not None:
         parent = next((p for p in ancestry[idx + 1:] if _base(p['comm']) not in TRANSPARENT), None)
     if parent is not None and not _is_direct(parent):
-        words = launcher_words(parent['args'])
+        words = launcher_words(parent['args'][1:] if _runs_script(parent) else parent['args'])
         return Route('wrapper', words, _base(parent['comm']), words is None, lane, True)
     if has_creds:
         kind = 'env'

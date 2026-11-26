@@ -24,6 +24,8 @@ set -uo pipefail
 COMMAND=""
 VERIFY=""
 TIMEOUT=300
+WATCH=""          # set here so an exported WATCH can never leak in
+unset RIT_WINDOW_ID RIT_WINDOW_TTY   # only ever set by this script, once a window exists
 LABEL=""
 
 usage() {
@@ -51,7 +53,9 @@ is still running and stops with EXITED_EARLY + the window's last lines (tokens m
 instead of waiting out the timeout.
   -h, --help  show this help and exit (nothing is run)
 
-Environment variables: none read by this script.
+Environment variables: none read by this script. Exported to --verify once the window
+exists: RIT_WINDOW_ID and RIT_WINDOW_TTY (empty during the no-window pre-check, so a test
+that needs the window can never pass as ALREADY_SATISFIED). Prints WINDOW_TTY=<tty>.
 Unknown arguments exit 2 with a message on stderr.
 EOF
 }
@@ -83,9 +87,9 @@ if [ "$(uname -s)" != "Darwin" ]; then
 	echo "run-in-terminal: needs macOS Terminal.app (this is $(uname -s))" >&2
 	exit 2
 fi
-WATCH="${WATCH:-8}"
+[ -z "$WATCH" ] && WATCH=8
 case "$WATCH" in *[!0-9]*|'') echo "error: --watch needs a whole number of seconds, got '$WATCH'" >&2; exit 2 ;; esac
-case "${TIMEOUT:-300}" in *[!0-9]*|'') echo "error: --timeout needs a whole number of seconds, got '$TIMEOUT'" >&2; exit 2 ;; esac
+case "$TIMEOUT" in *[!0-9]*|'') echo "error: --timeout needs a whole number of seconds, got '$TIMEOUT'" >&2; exit 2 ;; esac
 
 # If the desired state already holds, do not interrupt the user at all.
 if [ -n "$VERIFY" ] && ( eval "$VERIFY" ) >/dev/null 2>&1; then
@@ -134,6 +138,9 @@ WINDOW_ID=$(osascript -e "$SCRIPT" 2>/dev/null) || {
 	exit 1
 }
 echo "WINDOW_ID=$WINDOW_ID"
+WINDOW_TTY=$(osascript -e "tell application \"Terminal\" to get tty of selected tab of window id $WINDOW_ID" 2>/dev/null)
+echo "WINDOW_TTY=$WINDOW_TTY"
+export RIT_WINDOW_ID="$WINDOW_ID" RIT_WINDOW_TTY="$WINDOW_TTY"
 
 # Cheap monitoring of the window we opened: one property read per poll. `busy` is true while
 # the command runs; false means it ended (or never started, e.g. a shell parse error).

@@ -34,13 +34,14 @@ The route is LEARNED from how the calling session was launched, never configured
 
 | `--route` | What the window runs | When |
 |---|---|---|
-| `auto` (default) | inside a session: inherit its credentials; on a normal Anthropic login, plain `claude` with nothing copied; outside any session: the learned launcher, else the login | almost always |
+| `auto` (default) | inside a session: inherit its credentials; on a normal Anthropic login, plain `claude` with nothing copied; outside any session: the shell's own route variables if set, else the learned launcher, else the login | almost always |
 | `inherit` | plain `claude` with the caller's route variables (0600 env file, deleted on read) | force the same key |
 | `launcher` | the program that started this session (e.g. a gateway CLI), which picks its own key | the user asks for the launcher's own key choice |
 | `login` | plain `claude` on the normal login | the user asks for their own login |
 
-Verdicts: `STARTED pid=… session=… route=… lane=<host>`, then `REPLIED` when a prompt was given
-(exit 0). `NOT_STARTED`, `NO_REPLY`, `SESSION_EXITED` (exit 1). A window that opened proves
+Verdicts: `STARTED pid=… session=… route=… lane=<host>` (the session on the opened window's
+tty, never a parallel one), then `REPLIED` when a prompt was given and a real reply arrived —
+an API error does not count (exit 0). `NOT_STARTED`, `NO_REPLY`, `SESSION_EXITED` (exit 1). A window that opened proves
 nothing — report the verdict line, not "launched".
 
 Default is the FULL session (MCP servers, plugins, settings). Use `--lean` only when the user
