@@ -627,9 +627,11 @@ bump_versions() {  # bump_versions <version> [title] — rewrite EXACTLY the sur
   changelog=$(cfg_get "changelog" "CHANGELOG.md")
   vfile=$(cfg_get "version_file" "")
   roadmap=$(cfg_get "roadmap" "")
-  python3 - "$top" "$manifest" "$changelog" "$vfile" "$v" "$btitle" <<'PY' || return 1
+  python3 - "$top" "$manifest" "$changelog" "$vfile" "$v" "$btitle" "$RTC_SHIP_DIR" <<'PY' || return 1
 import datetime, os, re, sys
-top, manifest, changelog, vfile, v, btitle = sys.argv[1:7]
+top, manifest, changelog, vfile, v, btitle, ship_dir = sys.argv[1:8]
+sys.path.insert(0, ship_dir)
+from rtc_changelog import mask
 
 def write_atomic(path, data):
     # tmp + os.replace: a crash mid-write must not truncate the surface (council review
@@ -660,8 +662,13 @@ print("  %s -> %s" % (manifest, v))
 cp = os.path.join(top, changelog) if changelog else ""
 if cp and os.path.exists(cp):
     text = open(cp).read()
-    if not re.search(r'^#+\s+\[?' + re.escape(v) + r'\]?(\s|$)', text, re.M):
-        m = re.search(r'^##+\s+\[?[0-9]+\.[0-9]+\.[0-9]+\]?[^\n]*$', text, re.M)
+    # Both searches run over mask(text): fenced lines blanked IN PLACE (same length), so a fenced
+    # `## x.y.z` example is neither "an existing entry" (the bump skipped writing one) nor the
+    # style source / insertion point (the entry landed inside the fence), while m.start() and
+    # m.group(0) stay valid in the real text (2026-11-27).
+    unf = mask(text)
+    if not re.search(r'^#+\s+\[?' + re.escape(v) + r'\]?(\s|$)', unf, re.M):
+        m = re.search(r'^##+\s+\[?[0-9]+\.[0-9]+\.[0-9]+\]?[^\n]*$', unf, re.M)
         if m:
             # Insert directly above the previous release entry — correct whether or
             # not a title/comment block precedes it (the old re.M title search matched
@@ -724,8 +731,10 @@ version_gate() {
   roadmap=$(cfg_get "roadmap" "")
   mv=$(python3 -c "import json,sys;print(json.load(open('$top/$manifest')).get('version',''))" 2>/dev/null || echo "")
   # BOTH heading styles: Keep-a-Changelog permits `## 1.2.3` and `## [1.2.3]`, and this repo's own
-  # CHANGELOG uses the unbracketed form while free-agents' uses brackets.
-  cv=$(sed -n -E 's/^##+[[:space:]]+\[?([0-9]+\.[0-9]+\.[0-9]+)\]?.*/\1/p' "$top/$changelog" 2>/dev/null | head -1)
+  # CHANGELOG uses the unbracketed form while free-agents' uses brackets. Read through the shared
+  # fence-aware scanner: a fenced `## x.y.z` example above the top entry read as the version and
+  # refused a consistent tree (2026-11-27). No entry / no file = empty, which the gate reports.
+  cv=$(python3 "$RTC_SHIP_DIR/rtc_changelog.py" top "$top/$changelog" 2>/dev/null || true)
   vv=""; [ -n "$vfile" ] && [ -f "$top/$vfile" ] && vv=$(tr -d '[:space:]' < "$top/$vfile")
   # The roadmap surface resolves through the SAME helper the bump writes with — 'Current
   # released version' section first, then first versioned heading, then first token — two

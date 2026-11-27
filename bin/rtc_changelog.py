@@ -2,17 +2,22 @@
 """rtc_changelog.py — the ONE fence-aware CHANGELOG scanner rtc-ship.sh uses for every heading scan.
 
 A `## x.y.z` line inside a fenced code block (``` or ~~~) is an EXAMPLE, not an entry. Every scan —
-the door's "has an entry" and placeholder checks, the tag/entry count, the release-notes extraction —
-reads headings through unfenced() so none of them can be fooled by one (2026-11-27).
+the door's "has an entry" and placeholder checks, the tag/entry count, the release-notes extraction,
+the version gate's top-entry read and --bump-versions — reads headings through unfenced() (or the
+offset-preserving mask()) so none of them can be fooled by one (2026-11-27).
 
 Usage:
   rtc_changelog.py section <changelog> <version>
       Print the body of <version>'s entry: the lines AFTER its heading line, up to the next
       same-level (`## `) heading outside a fence. Exit 3 when there is no such entry.
+  rtc_changelog.py top <changelog>
+      Print the version of the first entry heading (`##`+, either bracket style) outside a
+      fence — the version gate's "top entry". Exit 3 when there is none.
   rtc_changelog.py --help
 
-Library (sys.path.insert the bin dir): unfenced(text), versions(text), section(text, version).
-Exit codes: 0 ok · 2 usage error · 3 no entry for <version>.
+Library (sys.path.insert the bin dir): unfenced(text), mask(text), versions(text), top(text),
+section(text, version).
+Exit codes: 0 ok · 2 usage error · 3 no entry (for <version>, or no versioned heading at all).
 Environment: none.
 """
 import re
@@ -43,6 +48,27 @@ def unfenced(text):
             fence = None
 
 
+def mask(text):
+    """text with every fenced line (markers included) blanked to spaces, newlines kept: the SAME
+    length, so a regex run over mask(text) yields offsets that are valid in text itself."""
+    lines = text.splitlines(keepends=True)
+    keep = {i for i, _ in unfenced(text)}
+    return "".join(l if i in keep else re.sub(r"[^\r\n]", " ", l) for i, l in enumerate(lines))
+
+
+# The gate's top entry keeps the old sed's breadth: `##` or deeper, either bracket style.
+_TOP = re.compile(r"##+[ \t]+\[?(\d+\.\d+\.\d+)\]?")
+
+
+def top(text):
+    """Version of the first entry heading outside a fence, or None."""
+    for _, line in unfenced(text):
+        m = _TOP.match(line)
+        if m:
+            return m.group(1)
+    return None
+
+
 def versions(text):
     """Every x.y.z carried by a `## ` entry heading outside a fence, in file order (dups kept)."""
     out = []
@@ -71,11 +97,19 @@ def main(argv):
     if len(argv) == 2 and argv[1] in ("-h", "--help"):
         print((__doc__ or "").strip())
         return 0
-    if len(argv) != 4 or argv[1] != "section":
-        print("usage: rtc_changelog.py section <changelog> <version>  (--help for more)", file=sys.stderr)
+    if not ((len(argv) == 4 and argv[1] == "section") or (len(argv) == 3 and argv[1] == "top")):
+        print("usage: rtc_changelog.py section <changelog> <version> | top <changelog>"
+              "  (--help for more)", file=sys.stderr)
         return 2
     with open(argv[2], encoding="utf-8", errors="replace") as fh:
-        body = section(fh.read(), argv[3])
+        text = fh.read()
+    if argv[1] == "top":
+        v = top(text)
+        if v is None:
+            return 3
+        print(v)
+        return 0
+    body = section(text, argv[3])
     if body is None:
         return 3
     sys.stdout.write(body)

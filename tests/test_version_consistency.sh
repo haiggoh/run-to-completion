@@ -11,9 +11,12 @@
 set -uo pipefail
 case "${1:-}" in -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;; -*) echo "usage: $0 [repo-root]" >&2; exit 2 ;; esac
 ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
+# The scanner comes from THIS script's repo, never from [repo-root] (a temp tree has no bin/).
+SCAN="$(cd "$(dirname "$0")/.." && pwd)/bin/rtc_changelog.py"
 
 mv=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("version",""))' "$ROOT/.claude-plugin/plugin.json" 2>/dev/null)
-cv=$(sed -n -E 's/^##+[[:space:]]+\[?([0-9]+\.[0-9]+\.[0-9]+)\]?.*/\1/p' "$ROOT/CHANGELOG.md" 2>/dev/null | head -1)
+# Top entry = first versioned heading OUTSIDE a code fence (a fenced example read as the version).
+cv=$(python3 "$SCAN" top "$ROOT/CHANGELOG.md" 2>/dev/null || true)
 echo "  .claude-plugin/plugin.json : ${mv:-<none>}"
 echo "  CHANGELOG.md (top entry)   : ${cv:-<none>}"
 [ -n "$mv" ] || { echo "✖ no version in plugin.json"; exit 1; }

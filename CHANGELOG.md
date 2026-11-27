@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.7.4] — 2026-11-27
+
+### Fixed — the version gate and `--bump-versions` ignore fenced headings too
+
+- Closes the two scans 1.7.3 listed as known: a `## x.y.z` inside a ```` ``` ```` / `~~~` fence
+  above the top entry was read as the CHANGELOG's version (false "version surfaces disagree"), and
+  `--bump-versions` treated a fenced heading of the new version as an existing entry (no entry
+  written) or used a fenced heading as its style source and insertion point (the entry landed
+  inside the fence). The generic gate, this repo's own `tests/test_version_consistency.sh`, and
+  the bump now read through `bin/rtc_changelog.py`: a new `top` subcommand, and `mask()` — fenced
+  lines blanked in place at the same length, so the bump's offsets stay valid in the real file.
+- Pinned by 4 new cases in `tests/test_ship_changelog_fences.sh` (9 red first, incl. the repo's
+  own version test against a planted fenced tree); 7 mutants of `rtc_changelog.py` each killed.
+- Not covered: the ROADMAP resolver (`roadmap_target`) still reads headings fence-blind — a
+  different file, no reported case.
+
 ## [1.7.3] — 2026-11-27
 
 ### Fixed — CHANGELOG scans no longer read headings inside fenced code blocks
