@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.7.3] — 2026-11-27
+
+### Fixed — CHANGELOG scans no longer read headings inside fenced code blocks
+
+- A `## x.y.z` line inside a ```` ``` ```` / `~~~` fence is an example, not an entry, but four ship
+  scans matched it anywhere: the door's "has an entry" grep (a fenced example could stand in for a
+  MISSING entry — false pass), the door's placeholder check, the 1.6.4 tag/entry count (false WARN,
+  or false HARD when the fence showed the shipped or previous version), and the release-notes
+  extraction (a fenced example above the entry was published as the release body; one inside the
+  entry truncated it). All four now read through `bin/rtc_changelog.py`, one fence-aware scanner
+  with CommonMark rules (only the same fence character at ≥ the opening length closes a fence).
+- The door's placeholder check read the body from mid-heading-line, so a dated
+  `## [x] — date` placeholder — the form `--bump-versions` writes — passed the door and was only
+  refused at tag time, after a full gate run. The body now starts on the line after the heading.
+- Pinned by `tests/test_ship_changelog_fences.sh` (new, 8 red first) and 3 new cases in
+  `tests/test_ship_changelog_tags.sh` (4 red first); 5 mutants of `rtc_changelog.py`
+  (any-char-closes, never-closes, no-fence-skip, body-from-heading-line, `###`-ends-entry) are
+  each killed — the last needed a new `###` sub-section assertion, a rule that was never pinned.
+- Known, not yet fixed (fail loudly, never publish): the version gate's top-heading read and
+  `--bump-versions`' "entry exists?" check still see fenced headings.
+
 ## [1.7.2] — 2026-11-26
 
 ### Changed — release-train paragraph in the ship skill (plan 2026-11-26-merge-not-rebase-published-branches)

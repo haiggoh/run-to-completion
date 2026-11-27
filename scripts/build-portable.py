@@ -62,6 +62,7 @@ COPY_FILES = [
     "hooks/check-tag-visibility.py",
     "scripts/rtc-ship.sh",
     "scripts/rtc_version_surface.py",
+    "scripts/rtc_changelog.py",
     "skills/autopilot/SKILL.md",
     "skills/close-out-the-run/SKILL.md",
     "skills/execute-unattended/SKILL.md",
@@ -73,7 +74,8 @@ COPY_FILES = [
     "skills/ungate-queue/SKILL.md",
 ]
 HOST_TO_PORTABLE = {"scripts/rtc-ship.sh": "bin/rtc-ship.sh",
-                    "scripts/rtc_version_surface.py": "bin/rtc_version_surface.py"}
+                    "scripts/rtc_version_surface.py": "bin/rtc_version_surface.py",
+                    "scripts/rtc_changelog.py": "bin/rtc_changelog.py"}
 TRANSFORMS = {
     "skills/autopilot/SKILL.md": [("soft:${CLAUDE_PLUGIN_ROOT}/bin/rtc-ship.sh", "${CLAUDE_PLUGIN_ROOT}/scripts/rtc-ship.sh"),
            ("soft:bash bin/rtc-ship.sh", 'bash "$CLAUDE_PLUGIN_ROOT/scripts/rtc-ship.sh"')],
@@ -126,6 +128,10 @@ COMPONENTS = [
      "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
      "surfaces": {"chat": False, "cowork": False, "code": True},
      "notes": "version-surface resolver sourced by rtc-ship.sh from its own dir — scripts/ in portable"},
+    {"path": "scripts/rtc_changelog.py", "kind": "library",
+     "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
+     "surfaces": {"chat": False, "cowork": False, "code": True},
+     "notes": "fence-aware CHANGELOG scanner rtc-ship.sh calls from its own dir — scripts/ in portable"},
 ]
 
 

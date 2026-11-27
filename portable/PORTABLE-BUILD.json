@@ -85,14 +85,27 @@
         "code": true,
         "cowork": false
       }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "library",
+      "notes": "fence-aware CHANGELOG scanner rtc-ship.sh calls from its own dir \u2014 scripts/ in portable",
+      "path": "scripts/rtc_changelog.py",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": false
+      }
     }
   ],
   "files": {
-    ".claude-plugin/plugin.json": "003e6dcb19d8500c0ef925996edbc319c3e47ff090b0ec652cb7b6a50127dcda",
+    ".claude-plugin/plugin.json": "a1af1f03abdfd7cbcc66063b9da3948d3caea1dff7b537fc366f413a643e1af7",
     "hooks/check-tag-visibility.py": "15fcb5fffbcf5563643edfa8b2f41c8f00006e2dd5a8960d3aa909ac1e39b6e3",
     "hooks/hooks.json": "c8934e1793d3f85e66ef7a45ccdc645f551421bd75384c2b33b28e723baf4588",
     "hooks/nudge.sh": "21e7399a8ff4424d78a1d481711a81184f9f7dc1817ce4fba25ee2e01cf08457",
-    "scripts/rtc-ship.sh": "60ed224d4155997492e7b575e0a0396c4efa56dbd1a6a0aebd8554724576e27a",
+    "scripts/rtc-ship.sh": "69ced93e6f483a9b54563dacec92ee4c83f2b7db4eba3f1b3b5853205f906e35",
+    "scripts/rtc_changelog.py": "c43d72710ee63572532f54fb1a7f6dc9d7eb12e475b5059e1d778af5cd188752",
     "scripts/rtc_version_surface.py": "9f2dd7a059723042909288b2003878a157d827056914e3c120a806e00bb7b4eb",
     "skills/autopilot/SKILL.md": "0de6b9372e291acdfdba72089ba5d15affba93472e1af574ac5e060bc9d4e94e",
     "skills/close-out-the-run/SKILL.md": "0efa276b17147a010a90f11c2dea4c2a3970df6ee0d24e6a2759a2bfcc25a1bc",
@@ -105,7 +118,7 @@
     "skills/ungate-queue/SKILL.md": "aa49963534e95785908b87d25d7739b0c5a95f5b1c6c9b11a2e53fe8d0e652e4"
   },
   "schema": "haiggoh-portable-build/1",
-  "source_commit": "8c15ba41aba54b9e0bdbee4c5f9b102d9cfcea3e",
+  "source_commit": "7c314751e920c8d7ebde029123ced1bcb3c78d62",
   "source_repo": "haiggoh/run-to-completion",
   "transform_version": "1"
 }

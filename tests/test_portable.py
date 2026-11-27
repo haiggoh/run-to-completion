@@ -62,7 +62,7 @@ def test_host_to_portable_file_set_is_pinned():
     for sk in sorted(glob.glob(str(ROOT / "skills" / "*" / "SKILL.md"))):
         rel = os.path.relpath(sk, ROOT)
         assert (PORTABLE / rel).is_file(), rel
-    for rel in ("rtc-ship.sh", "rtc_version_surface.py"):
+    for rel in ("rtc-ship.sh", "rtc_version_surface.py", "rtc_changelog.py"):
         assert (PORTABLE / "scripts" / rel).is_file(), rel
         assert (PORTABLE / "scripts" / rel).read_bytes() == (ROOT / "bin" / rel).read_bytes(), rel
     for rel in ("hooks/hooks.json", "hooks/nudge.sh", "hooks/check-tag-visibility.py"):

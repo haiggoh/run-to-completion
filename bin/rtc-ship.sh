@@ -1276,26 +1276,24 @@ if [ -n "$tree_v" ] && [ "$tree_v" != "$V" ]; then
   exit 1
 fi
 door_changelog=$(cfg_get "changelog" "CHANGELOG.md")
-if [ -n "$door_changelog" ] && [ -f "$TOP/$door_changelog" ] \
-   && ! grep -qE "^##+[[:space:]]+\[?${V//./\\.}\]?([^0-9.]|$)" "$TOP/$door_changelog"; then
-  echo "✖ $door_changelog has no entry for $V — the release notes would be empty" >&2
-  exit 1
-fi
-# 2026-11-16: a placeholder section PASSED that check and was published verbatim as the release
-# body (brief-agents v0.2.4/v0.2.5, cost-tracker v0.20.13). The release body is the CHANGELOG
-# section verbatim, so a placeholder-only section must stop the ship at the door.
+# Both door checks read the entry through bin/rtc_changelog.py, the ONE fence-aware scanner: a
+# `## x.y.z` inside a ``` / ~~~ fence is an example, and a grep counted it as the entry (false PASS,
+# 2026-11-27). Exit 3 = no entry; any other failure is the helper itself breaking — never a pass.
 if [ -n "$door_changelog" ] && [ -f "$TOP/$door_changelog" ]; then
-  door_body=$(python3 - "$TOP/$door_changelog" "$V" <<'PYEOF'
-import re, sys
-text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
-v = sys.argv[2]
-m = re.search(r"^##+[ \t]+\[?" + re.escape(v) + r"\]?", text, re.M)
-if m:
-    rest = text[m.end():]
-    nxt = re.search(r"^##(?!#)", rest, re.M)
-    sys.stdout.write(rest[:nxt.start()] if nxt else rest)
-PYEOF
-)
+  door_rc=0
+  door_body=$(python3 "$RTC_SHIP_DIR/rtc_changelog.py" section "$TOP/$door_changelog" "$V") || door_rc=$?
+  if [ "$door_rc" -eq 3 ]; then
+    echo "✖ $door_changelog has no entry for $V — the release notes would be empty" >&2
+    exit 1
+  elif [ "$door_rc" -ne 0 ]; then
+    echo "✖ reading $door_changelog failed (rtc_changelog.py exit $door_rc) — ship refused" >&2
+    exit 1
+  fi
+  # 2026-11-16: a placeholder section PASSED the entry check and was published verbatim as the
+  # release body (brief-agents v0.2.4/v0.2.5, cost-tracker v0.20.13), so a placeholder-only section
+  # stops the ship here. The body starts on the line AFTER the heading: read from mid-line, a dated
+  # `## [x] — date` heading (the form --bump-versions writes) leaked its date into the body and the
+  # placeholder slipped past the door until tag time, after a full gate run (2026-11-27).
   if [ "$(printf '%s' "$door_body" | tr -d '[:space:]')" = "-(releasenotesgohere)" ]; then
     echo "✖ $door_changelog's $V section is still the placeholder — write the release notes first (the release body is taken verbatim from this section)" >&2
     exit 1
@@ -1327,30 +1325,17 @@ if [ -n "$door_changelog" ] && [ -f "$TOP/$door_changelog" ]; then
   # Tags travel in the ENV, not a pipe: the heredoc IS python's stdin, so a piped tag list would
   # be silently replaced by the script text and every check would pass on zero tags.
   if ! RTC_CL_TAGS=$(git tag -l "${cl_prefix}*") \
-       python3 - "$TOP/$door_changelog" "$V" "$cl_prefix" "$door_changelog" <<'PYEOF'
+       python3 - "$TOP/$door_changelog" "$V" "$cl_prefix" "$door_changelog" "$RTC_SHIP_DIR" <<'PYEOF'
 import os, re, sys
-path, v, prefix, name = sys.argv[1:5]
+path, v, prefix, name, ship_dir = sys.argv[1:6]
+# Headings inside fenced code blocks are EXAMPLES, not entries (a CHANGELOG documenting its own
+# heading format false-WARNed, or false-HARDed when the fence showed $V or the previous version):
+# counted through the shared fence-aware scanner, like every other CHANGELOG scan.
+sys.path.insert(0, ship_dir)
+from rtc_changelog import versions
 def key(s):
     return tuple(int(x) for x in s.split("."))
-# Headings inside fenced code blocks are EXAMPLES, not entries (a CHANGELOG documenting its own
-# heading format false-WARNed, or false-HARDed when the fence showed $V or the previous version).
-# CommonMark fences: ``` or ~~~ (3+), indented at most 3 spaces; only the SAME char at >= the
-# opening length closes one, so a ``` line inside a ~~~~ fence stays inside it.
-HEAD = re.compile(r"##(?!#)[ \t]+\[?(\d+\.\d+\.\d+)\]?(?![\d.])")
-FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
-heads, fence = [], None
-for line in open(path, encoding="utf-8", errors="replace").read().splitlines():
-    f = FENCE.match(line)
-    if fence is None:
-        if f:
-            fence = f.group(1)
-            continue
-        h = HEAD.match(line)
-        if h:
-            heads.append(h.group(1))
-    elif f and f.group(1)[0] == fence[0] and len(f.group(1)) >= len(fence) \
-            and not line[f.end():].strip():
-        fence = None
+heads = versions(open(path, encoding="utf-8", errors="replace").read())
 count = {}
 for h in heads:
     count[h] = count.get(h, 0) + 1
@@ -1429,27 +1414,17 @@ fi
 
 # Extracted with python, not an awk program assembled from quoted fragments: the bracket-optional
 # heading form plus an interpolated version made a regex too fragile to trust in shell quoting.
-# Both heading styles are accepted (## 1.2.3 and ## [1.2.3]).
+# Both heading styles are accepted (## 1.2.3 and ## [1.2.3]), the body starts AFTER the heading
+# line (a date/title there is not release notes), and it ends at the next SAME-LEVEL heading only
+# (`###` sub-headings stay inside). Read through bin/rtc_changelog.py, the shared fence-aware
+# scanner: a fenced `## x.y.z` example above the entry was published as the release body, and one
+# inside the entry truncated it (2026-11-27). No entry exits 3, which set -e turns into a stop.
 # Notes come from the SHIPPED tree ($TOP), never the canonical checkout, which on the AROUND route
 # holds someone else's branch and edits.
 # The CONFIGURED changelog ($door_changelog, the same key the gate reads) — a hardcoded CHANGELOG.md
 # gave a CHANGES.md repo no notes (2026-10-25 review). An empty key = no changelog = generated notes.
-notes=$(if [ -n "$door_changelog" ] && [ -f "$TOP/$door_changelog" ]; then CHANGELOG_FILE="$TOP/$door_changelog" VERSION="$V" python3 - <<'PYEOF'
-import os, re, sys
-path, version = os.environ["CHANGELOG_FILE"], os.environ["VERSION"]
-text = open(path, encoding="utf-8", errors="replace").read()
-m = re.search(r"^##+[ \t]+\[?" + re.escape(version) + r"\]?\b", text, re.M)
-if not m:
-    sys.exit(1)
-# Skip to the end of the HEADING line: a heading may carry a date and title after the version
-# (`## [0.6.4] — 2026-10-24 — …`), and those are not release notes.
-nl = text.find("\n", m.end())
-rest = text[len(text) if nl == -1 else nl + 1:]
-# Stop at the next SAME-LEVEL heading only: `##+` would also match `###`, truncating every
-# entry at its first sub-heading and producing an empty release note.
-nxt = re.search(r"^##(?!#)", rest, re.M)
-sys.stdout.write(rest[:nxt.start()] if nxt else rest)
-PYEOF
+notes=$(if [ -n "$door_changelog" ] && [ -f "$TOP/$door_changelog" ]; then
+  python3 "$RTC_SHIP_DIR/rtc_changelog.py" section "$TOP/$door_changelog" "$V"
 else echo ""; fi)
 # The release choke point: the body published to GitHub is this section verbatim — refuse to
 # publish the placeholder (2026-11-16: three releases shipped "(release notes go here)" bodies
