@@ -1332,8 +1332,25 @@ import os, re, sys
 path, v, prefix, name = sys.argv[1:5]
 def key(s):
     return tuple(int(x) for x in s.split("."))
-heads = re.findall(r"^##(?!#)[ \t]+\[?(\d+\.\d+\.\d+)\]?(?![\d.])", open(path, encoding="utf-8",
-                   errors="replace").read(), re.M)
+# Headings inside fenced code blocks are EXAMPLES, not entries (a CHANGELOG documenting its own
+# heading format false-WARNed, or false-HARDed when the fence showed $V or the previous version).
+# CommonMark fences: ``` or ~~~ (3+), indented at most 3 spaces; only the SAME char at >= the
+# opening length closes one, so a ``` line inside a ~~~~ fence stays inside it.
+HEAD = re.compile(r"##(?!#)[ \t]+\[?(\d+\.\d+\.\d+)\]?(?![\d.])")
+FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
+heads, fence = [], None
+for line in open(path, encoding="utf-8", errors="replace").read().splitlines():
+    f = FENCE.match(line)
+    if fence is None:
+        if f:
+            fence = f.group(1)
+            continue
+        h = HEAD.match(line)
+        if h:
+            heads.append(h.group(1))
+    elif f and f.group(1)[0] == fence[0] and len(f.group(1)) >= len(fence) \
+            and not line[f.end():].strip():
+        fence = None
 count = {}
 for h in heads:
     count[h] = count.get(h, 0) + 1

@@ -11,7 +11,8 @@
 #   WARN  every older published tag without an entry, and any other duplicated heading
 #
 # Cases: renamed_previous_refused, duplicate_new_refused, duplicate_previous_refused,
-# older_gap_warns_and_ships, healthy_changelog_ships_silently.
+# older_gap_warns_and_ships, fenced_example_ships, fenced_old_heading_no_warn,
+# real_duplicate_after_fence_refused, healthy_changelog_ships_silently.
 # Rig: tests/lib/rehearsal.sh (sourced; the same is/has/summary idiom as the sibling suites).
 #
 # Usage: bash tests/test_ship_changelog_tags.sh [--help]
@@ -64,6 +65,33 @@ rc=$(ship "$W" 0.2.0 'old gap')
 is "older gap: ship still exits 0" "0" "$rc"
 has "  the warning names the old tag" "$(cat "$W/out")" "⚠ CHANGELOG.md has no entry for older published tag(s): v0.0.9"
 is "  and the release really happened" "v0.2.0" "$(git -C "$W/origin.git" tag -l v0.2.0)"
+
+echo "== a fenced EXAMPLE of the shipped/previous heading is not an entry: ships =="
+# A CHANGELOG documenting the heading format inside a code fence (``` or ~~~) must not count those
+# lines as entries — before the fix this was a false HARD ("has 2 entries for 0.2.0"). The ````
+# line inside the ~~~ fence is LONGER than the opener, so only the same-char rule keeps it open;
+# the heading after it is the SHIPPED version, so a wrong close always yields 2 entries for 0.2.0
+# (leaking 0.1.0 instead was masked: the stray ~~~ then reopened and hid the real 0.1.0 entry).
+F="$TMP/cl-fenced"; rehearse "$F"; tag_origin "$F" v0.1.0
+with_changelog "$F" '# Changelog\n\n## 0.2.0\n\nheadings look like:\n\n```markdown\n## 0.2.0\n## [0.1.0] — 2026-01-01\n```\n\n~~~\n````\n## 0.2.0\n~~~\n\n## 0.1.0\n\nfirst\n'
+rc=$(ship "$F" 0.2.0 'fenced')
+is "fenced example headings: ship exits 0" "0" "$rc"
+is "  no duplicate-entry refusal" "0" "$(grep -c 'entries for' "$F/out")"
+is "  tag created" "v0.2.0" "$(git -C "$F/origin.git" tag -l v0.2.0)"
+
+echo "== a fenced copy of an OLD heading does not warn as a repeat =="
+G="$TMP/cl-fenced-old"; rehearse "$G"; tag_origin "$G" v0.0.9 v0.1.0
+with_changelog "$G" '# Changelog\n\n## 0.2.0\n\nsecond\n\n   ```\n## 0.0.9\n   ```\n\n## 0.1.0\n\nfirst\n\n## 0.0.9\n\nzeroth\n'
+rc=$(ship "$G" 0.2.0 'fenced old')
+is "fenced old heading: ship exits 0" "0" "$rc"
+is "  no repeated-heading warning" "0" "$(grep -c 'repeats heading' "$G/out")"
+
+echo "== a REAL duplicate after a closed fence is still refused (the fence must close) =="
+K="$TMP/cl-fence-closed"; rehearse "$K"; tag_origin "$K" v0.1.0
+with_changelog "$K" '# Changelog\n\n## 0.2.0\n\n```\nexample\n```\n\n## 0.2.0\n\nstub\n\n## 0.1.0\n\nfirst\n'
+rc=$(ship "$K" 0.2.0 'fence closed')
+is "duplicate after a closed fence: ship exits 1" "1" "$rc"
+has "  stderr says it appears more than once" "$(cat "$K/out")" "has 2 entries for 0.2.0"
 
 echo "== a healthy CHANGELOG ships with no warning (positive control) =="
 H="$TMP/cl-healthy"; rehearse "$H"; tag_origin "$H" v0.1.0
