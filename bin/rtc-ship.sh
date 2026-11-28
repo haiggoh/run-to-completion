@@ -646,18 +646,24 @@ def write_atomic(path, data):
 
 # manifest: first "version" field only, indent preserved — a full json round-trip would reformat
 # the whole file and bury the bump in a whitespace diff.
-mp = os.path.join(top, manifest)
-lines = open(mp).read().splitlines(keepends=True)
-out, done = [], False
-for ln in lines:
-    if not done and '"version"' in ln:
-        ln = re.sub(r'("version"\s*:\s*")[^"]*(")', r'\g<1>' + v + r'\g<2>', ln, count=1)
-        done = True
-    out.append(ln)
-if not done:
-    sys.exit('✖ no "version" field in ' + mp)
-write_atomic(mp, "".join(out))
-print("  %s -> %s" % (manifest, v))
+# An explicitly EMPTY manifest ("manifest": "") is the plain-repo path the gate already honours
+# (1.6.3): there is no manifest to write. Joining "" used to open the repo DIRECTORY and die with
+# IsADirectoryError, so --bump-versions never worked on a plain repo (found 2026-11-28).
+if manifest:
+    mp = os.path.join(top, manifest)
+    lines = open(mp).read().splitlines(keepends=True)
+    out, done = [], False
+    for ln in lines:
+        if not done and '"version"' in ln:
+            ln = re.sub(r'("version"\s*:\s*")[^"]*(")', r'\g<1>' + v + r'\g<2>', ln, count=1)
+            done = True
+        out.append(ln)
+    if not done:
+        sys.exit('✖ no "version" field in ' + mp)
+    write_atomic(mp, "".join(out))
+    print("  %s -> %s" % (manifest, v))
+else:
+    print("  (no manifest declared — plain repo, nothing to write there)")
 # changelog: a NEW top entry in the file's own heading style (version, bracket, and date all
 # inherited from the current top VERSIONED heading), unless an entry for v already exists
 # (idempotent). The style source must be a VERSIONED heading — with `## [Unreleased]` on top

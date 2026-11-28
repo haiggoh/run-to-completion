@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.7.6] — 2026-11-28
+
+### Added — `"kind": "regex"` extra version surface (a version that lives in source code)
+
+- `extra_version_surfaces` entries may now be `{"path": …, "kind": "regex", "pattern": …}` for
+  versions in source files — Python `__version__ = "x"`, `VERSION = "x"`, any language. The
+  pattern needs exactly ONE capture group (the version) and must match exactly ONCE: zero matches
+  and two or more both fail loudly, never pick one. A bad regex, a missing pattern, or a pattern
+  with zero/two groups is refused at load time. The write replaces only the captured span.
+- Motivated by joyia-keyswitch (version only in `keyswitch/__init__.py`, no JSON manifest),
+  which had to ship 0.1.2 by hand on 2026-11-27.
+
+### Fixed — `--bump-versions` on a plain repo (`"manifest": ""`)
+
+- The bump opened `os.path.join(top, "")` — the repo directory — and died with
+  `IsADirectoryError`, so the 1.6.3 plain-repo path only ever worked for the gate. An empty
+  manifest is now skipped, as the gate already does.
+- `portable/` regenerated (it had drifted on main before this change: `tests/test_portable.py`
+  failed 2 on 2026-11-28 main as well).
+
+Tests: `tests/test_regex_surface.sh` (20 checks, red first; mutating the ambiguity guard → 2 red).
+
 ## [1.7.5] — 2026-11-28
 
 ### Added — `tag_gate`: the commit a tag lands on must carry the ship version on every surface

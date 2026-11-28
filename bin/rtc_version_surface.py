@@ -10,8 +10,14 @@ Usage:
   rtc_version_surface.py write <top> <surfaces-json> <version>
 
 <surfaces-json> is a JSON array — inline, or the path of a file holding it — of:
-  {"path": <repo-relative>, "kind": "json"|"toml-package"|"cargo-lock",
-   "key": <dotted json path, default "version">, "crate": <name, required for cargo-lock>}
+  {"path": <repo-relative>, "kind": "json"|"toml-package"|"cargo-lock"|"regex",
+   "key": <dotted json path, default "version">, "crate": <name, required for cargo-lock>,
+   "pattern": <Python regex with exactly ONE capture group, required for regex>}
+
+kind "regex" is for a version that lives in source code (`__version__ = "x"` in Python,
+`VERSION = "x"`, any language): the pattern is matched in MULTILINE mode and must match exactly
+ONCE — zero matches and two or more both fail, never pick one. The write replaces only the
+captured group's span.
 
 Every failure exits 1 naming the surface: a declared file that is missing or
 yields NO version is a failure, never a pass (empty extraction = failure). A
@@ -52,9 +58,22 @@ def load_surfaces(arg):
     for s in surfaces:
         if not isinstance(s, dict) or "path" not in s or "kind" not in s:
             fail("extra_version_surfaces entry needs \"path\" and \"kind\": %r" % (s,))
-        if s["kind"] not in ("json", "toml-package", "cargo-lock"):
-            fail("surface %s: unknown kind %r (json | toml-package | cargo-lock)"
+        if s["kind"] not in ("json", "toml-package", "cargo-lock", "regex"):
+            fail("surface %s: unknown kind %r (json | toml-package | cargo-lock | regex)"
                  % (s["path"], s["kind"]))
+        if s["kind"] == "regex":
+            pat = s.get("pattern")
+            if not isinstance(pat, str) or not pat:
+                fail("surface %s: kind regex needs \"pattern\"" % s["path"])
+            try:
+                compiled = re.compile(pat, re.M)
+            except re.error as e:
+                fail("surface %s: invalid pattern %r (%s)" % (s["path"], pat, e))
+            if compiled.groups != 1:
+                fail("surface %s: pattern must have exactly one capture group (the version), has %d"
+                     % (s["path"], compiled.groups))
+        elif s.get("pattern"):
+            fail("surface %s: \"pattern\" applies to kind regex only" % s["path"])
         if s["kind"] == "cargo-lock" and not s.get("crate"):
             fail("surface %s: kind cargo-lock needs \"crate\"" % s["path"])
         if s["kind"] != "json" and s.get("key"):
@@ -278,12 +297,33 @@ def lock_write(text, s, new):
     return "".join(lines)
 
 
+def _regex_match(text, s):
+    hits = list(re.finditer(s["pattern"], text, re.M))
+    if not hits:
+        fail("%s: pattern %r matches nothing" % (s["path"], s["pattern"]))
+    if len(hits) > 1:
+        fail("%s: pattern %r matches %d times — ambiguous, refusing to pick one"
+             % (s["path"], s["pattern"], len(hits)))
+    return hits[0]
+
+
+def regex_read(text, s):
+    return _regex_match(text, s).group(1)
+
+
+def regex_write(text, s, new):
+    m = _regex_match(text, s)
+    return text[:m.start(1)] + new + text[m.end(1):]
+
+
 def surface_extract(text, s):
     kind = s["kind"]
     if kind == "json":
         return json_read(text, s)
     if kind == "toml-package":
         return toml_read(text, s)
+    if kind == "regex":
+        return regex_read(text, s)
     return lock_read(text, s)
 
 
@@ -293,6 +333,8 @@ def surface_write(text, s, new):
         new_text = json_write(text, s, new)
     elif kind == "toml-package":
         new_text = toml_write(text, s, new)
+    elif kind == "regex":
+        new_text = regex_write(text, s, new)
     else:
         new_text = lock_write(text, s, new)
     # post-write check: the new text must carry the new version where the read path looks —
