@@ -24,6 +24,9 @@
 #                   surfaces; with a title, the new CHANGELOG section is seeded with it (not the
 #                   placeholder — the door refuses to ship a placeholder section, 2026-11-16)
 #   rtc-ship.sh --which-config                print the config this repo would use and exit
+#   rtc-ship.sh --tag-gate <worktree-dir> <ref> <version>   assert the COMMITTED tree at <ref>
+#                   carries <version> on every declared surface — the ship runs this after the
+#                   rebase and again right before tagging (2026-11-28 broken-tag lesson)
 #   rtc-ship.sh --help
 #
 # Exit codes (the same vocabulary on every surface — the ship loop, --test-only, --versions-only):
@@ -793,6 +796,85 @@ version_gate() {
 }
 
 # ----------------------------------------------------------------------------------------------
+# tag_gate — the COMMITTED tree the tag will land on must carry $V on every declared surface.
+# The door and version_gate read the WORKTREE; tag_gate reads `git show <ref>:<path>`, because the
+# tag lands on the COMMIT, never on worktree state. 2026-11-28 (free-agents v0.65.0): the release
+# rebase dropped the bump commit, so every surface still AGREED — on the previous version — and
+# tag v0.65.0 landed on a commit reading 0.64.2, invisible to version-keyed installers until the tag
+# was moved. Same readers as version_gate (rtc_changelog.py, roadmap_target, extra_surface): no
+# second implementation to drift. A declared surface ABSENT at the ref, or yielding no version,
+# is a FAILURE, never a pass (the empty-extraction rule).
+# ----------------------------------------------------------------------------------------------
+tag_gate() {  # tag_gate <repo> <ref> — exit 0 iff every declared surface at <ref> equals $V
+  local repo=$1 ref=$2 tmp m c vf r extras p bad=0
+  m=$(cfg_get "manifest" ".claude-plugin/plugin.json")
+  c=$(cfg_get "changelog" "CHANGELOG.md")
+  vf=$(cfg_get "version_file" "")
+  r=$(cfg_get "roadmap" "")
+  extras=$(cfg_get_raw "extra_version_surfaces" "")
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/rtc-tag-gate.XXXXXX")
+  local paths=("$m")
+  [ -n "$c" ] && paths+=("$c")
+  [ -n "$vf" ] && paths+=("$vf")
+  [ -n "$r" ] && paths+=("$r")
+  if [ -n "$extras" ] && [ "$extras" != '""' ]; then
+    while IFS= read -r p; do
+      case "$p" in ''|'"'*) continue ;; esac
+      paths+=("$p")
+    done < <(python3 -c 'import json,sys
+try: a = json.loads(sys.argv[1])
+except Exception: a = []
+if not isinstance(a, list): a = []
+print("\n".join(e["path"] for e in a if isinstance(e, dict) and e.get("path")))' "$extras" 2>/dev/null)
+  fi
+  for p in "${paths[@]}"; do
+    case "$p" in */*) mkdir -p "$tmp/${p%/*}" ;; esac
+    if ! git -C "$repo" show "$ref:$p" >"$tmp/$p" 2>/dev/null; then
+      echo "✖ $p is declared but ABSENT at $ref" >&2
+      bad=1
+    fi
+  done
+  local mv cv vv rv ex_out ep ev
+  mv=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('version',''))" "$tmp/$m" 2>/dev/null || echo "")
+  cv=$(python3 "$RTC_SHIP_DIR/rtc_changelog.py" top "$tmp/$c" 2>/dev/null || true)
+  vv=""; [ -n "$vf" ] && [ -f "$tmp/$vf" ] && vv=$(tr -d '[:space:]' < "$tmp/$vf")
+  rv=""; [ -n "$r" ] && [ -f "$tmp/$r" ] && rv=$(roadmap_target "$tmp/$r" read)
+  echo "  tag_gate @ $ref  (shipping ${PREFIX}${V}):"
+  echo "    $m : ${mv:-<none>}"
+  [ -n "$c" ] && echo "    $c (top entry) : ${cv:-<none>}"
+  [ -n "$vf" ] && echo "    $vf : ${vv:-<none>}"
+  [ -n "$r" ] && echo "    $r : ${rv:-<none>}"
+  if [ -z "$mv" ]; then echo "✖ no version in $m at $ref" >&2; bad=1
+  elif [ "$mv" != "$V" ]; then echo "✖ $m says $mv at $ref, shipping ${PREFIX}${V}" >&2; bad=1; fi
+  if [ -n "$c" ]; then
+    if [ -z "$cv" ]; then echo "✖ no numbered heading in $c at $ref" >&2; bad=1
+    elif [ "$cv" != "$V" ]; then echo "✖ $c top is $cv at $ref, shipping ${PREFIX}${V}" >&2; bad=1; fi
+  fi
+  if [ -n "$vf" ]; then
+    if [ -z "$vv" ]; then echo "✖ $vf holds no version at $ref" >&2; bad=1
+    elif [ "$vv" != "$V" ]; then echo "✖ $vf says $vv at $ref, shipping ${PREFIX}${V}" >&2; bad=1; fi
+  fi
+  if [ -n "$r" ] && [ -f "$tmp/$r" ]; then
+    if [ -z "$rv" ]; then echo "✖ $r holds no version at $ref" >&2; bad=1
+    elif [ "$rv" != "$V" ]; then echo "✖ $r says $rv at $ref, shipping ${PREFIX}${V}" >&2; bad=1; fi
+  fi
+  if [ -n "$extras" ] && [ "$extras" != '""' ]; then
+    if ex_out=$(extra_surface "$tmp" "$extras" read); then
+      while IFS=$'\t' read -r ep ev; do
+        [ -n "$ep" ] || continue
+        echo "    $ep : ${ev:-<none>}"
+        if [ -z "$ev" ]; then echo "✖ $ep declared but holds no version at $ref" >&2; bad=1
+        elif [ "$ev" != "$V" ]; then echo "✖ $ep says $ev at $ref, shipping ${PREFIX}${V}" >&2; bad=1; fi
+      done <<<"$ex_out"
+    else
+      echo "✖ extra_version_surfaces could not be read at $ref (declared surfaces must exist)" >&2; bad=1
+    fi
+  fi
+  rm -rf "$tmp"
+  return "$bad"
+}
+
+# ----------------------------------------------------------------------------------------------
 # The suite gates: parallel pytest, plus a tree stamp so a tree that already passed is not re-run.
 # A repo's own extra gates go in .rtc/pre-flight.sh (free-agents' litellm/picker venvs, say).
 # ----------------------------------------------------------------------------------------------
@@ -1161,6 +1243,7 @@ case "${1:-}" in
   --versions-only) ;;
   --check-versions) ;;
   --bump-versions) ;;
+  --tag-gate) ;;
   --which-config)
     ensure_defaults_template
     validate_defaults_template
@@ -1204,6 +1287,25 @@ if [ "$1" = --versions-only ] || [ "$1" = --check-versions ]; then
   # hand-rolled ship reliably skips. CHECK-ONLY: writes nothing (pinned by test_rtc_ship.sh).
   if ! version_gate; then echo "✖ version surfaces disagree" >&2; exit 1; fi
   phase "version surfaces agree"; exit 0
+fi
+if [ "$1" = --tag-gate ]; then
+  # --tag-gate <dir> <ref> <version> — assert the COMMITTED tree at <ref> carries <version> on
+  # every declared surface. The ship calls tag_gate after the rebase and again right before
+  # tagging; the standalone mode exists so the guard can be tested without a full ship, and so a
+  # hand-rolled ship can run the same check at its own tag step.
+  [ $# -eq 4 ] || { usage >&2; exit 2; }
+  cd "$2" 2>/dev/null || { echo "✖ --tag-gate: no such directory: $2" >&2; exit 2; }
+  V=$4
+  if ! printf '%s' "$V" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    echo "✖ --tag-gate: version '$V' is not a plain X.Y.Z — nothing checked" >&2
+    usage >&2; exit 2
+  fi
+  PREFIX=$(cfg_get "tag_prefix" "v")
+  if tag_gate "$(pwd)" "$3"; then
+    phase "tag gate passed: $3 carries ${PREFIX}${V} on every declared surface"; exit 0
+  fi
+  echo "✖ tag gate failed: $3 does not carry ${PREFIX}${V} on every declared surface" >&2
+  exit 1
 fi
 [ $# -eq 3 ] || { usage >&2; exit 2; }
 
@@ -1319,6 +1421,17 @@ if ! git rebase -q "origin/$DEFAULT_BRANCH" >"$SHIP_LOG_DIR/rebase.log" 2>&1; th
   git rebase --abort >/dev/null 2>&1 || true
   echo "✖ rebase onto origin/$DEFAULT_BRANCH failed — resolve it in $WT, then re-run:" >&2
   sed 's/^/      /' "$SHIP_LOG_DIR/rebase.log" | tail -n 15 >&2
+  exit 1
+fi
+# --- the committed branch must still carry $V after the rebase ----------------------------------
+# The door compared the WORKTREE to $V before the rebase; version_gate compares the surfaces with
+# EACH OTHER after it. Nothing compared the COMMITTED branch to $V: a rebase that dropped or
+# altered the bump commit sailed through both and the tag landed on the old version (free-agents
+# v0.65.0 shipped on a 0.64.2 tree, 2026-11-28; the tag had to be moved). tag_gate reads the
+# committed tree — refuse here, before any gate runs, and name the remedy.
+if ! tag_gate "$WT" "$BR"; then
+  echo "✖ the rebase left $BR without ${PREFIX}${V} on every declared surface — the bump commit" >&2
+  echo "  was dropped or altered: re-run 'rtc-ship.sh --bump-versions $WT $V', commit, re-run the ship" >&2
   exit 1
 fi
 
@@ -1440,6 +1553,14 @@ else echo ""; fi)
 # because the door check only verified the heading EXISTED, not its content).
 if [ -n "$door_changelog" ] && [ "$(printf '%s' "$notes" | tr -d '[:space:]')" = "-(releasenotesgohere)" ]; then
   echo "✖ release notes for $V are the placeholder — refusing to tag/publish; fill the $door_changelog section first" >&2
+  exit 1
+fi
+# --- the tag lands on $SHIP_REF: assert the COMMIT carries $V, never worktree state -------------
+# Same check as after the rebase, on the exact ref about to be tagged: on the CLASSIC route main
+# has just fast-forwarded, on the AROUND route the branch is pushed as the default branch. A tag
+# on a mismatched commit is invisible to version-keyed installers (free-agents v0.65.0, 2026-11-28).
+if ! tag_gate "$MAIN" "$SHIP_REF"; then
+  echo "✖ refusing to tag ${PREFIX}${V}: $SHIP_REF does not carry $V on every declared surface" >&2
   exit 1
 fi
 git tag -a "${PREFIX}${V}" -m "$(basename "$MAIN") $V — $TITLE

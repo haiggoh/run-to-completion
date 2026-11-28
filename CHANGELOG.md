@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.7.5] — 2026-11-28
+
+### Added — `tag_gate`: the commit a tag lands on must carry the ship version on every surface
+
+- 2026-11-28, free-agents v0.65.0 shipped broken: the release rebase dropped the version-bump
+  commit, every surface still agreed (on 0.64.2), the door and `version_gate` read the *worktree*
+  *before* the rebase, and nothing compared the *committed* tree to the version being shipped — so
+  tag v0.65.0 landed on a commit reading 0.64.2 and was invisible to version-keyed installers until
+  the tag was moved (broken-tag exception). Root fix: `tag_gate <repo> <ref>` reads every declared
+  surface via `git show <ref>:<path>` (manifest, changelog top, version_file, roadmap,
+  extra_version_surfaces — the same readers `version_gate` uses, no second implementation) and
+  refuses unless each equals the ship version; a declared-but-absent surface fails, never passes.
+- The ship calls it twice: after the rebase (a rebase that drops the bump is named in the refusal)
+  and again right before `git tag`, on the exact ref about to be tagged (both merge routes). New
+  standalone mode `rtc-ship.sh --tag-gate <dir> <ref> <version>` runs the same check without a full
+  ship, so hand-rolled ships can gate their own tag step.
+- Pinned by `tests/test_ship_tag_gate.sh`: 21 cases, including the dropped-bump shape, per-surface
+  regressions (changelog, VERSION, ROADMAP, extra surface), absent-surface refusal, a healthy
+  full ship still tagging with the gate visible at both call sites, and a planted negative (wrong
+  version argument). Mutation-checked: silencing the tag_gate changelog comparison turns exactly
+  the changelog-regression cases red.
+
 ## [1.7.4] — 2026-11-27
 
 ### Fixed — the version gate and `--bump-versions` ignore fenced headings too
