@@ -108,6 +108,23 @@ PY
 is "declared-but-absent surface: exits 1" "1" "$(tg "$H" HEAD 0.2.0)"
 has "  names the absent file" "$(cat "$H/tg-out")" "NO-SUCH-FILE is declared but ABSENT at HEAD"
 
+echo "== plain repo (manifest \"\") anchors on version_file — no crash, regression refused =="
+J="$TMP/plain"; rehearse "$J"
+( cd "$J/wt" && python3 - <<'PY'
+import json
+p = "rtc-ship.json"
+c = json.load(open(p))
+c["manifest"] = ""
+c["version_file"] = "VERSION"
+json.dump(c, open(p, "w"), indent=2)
+PY
+  printf '0.2.0\n' > VERSION
+  commit_in_wt "$J" plain )
+is "plain repo, VERSION 0.2.0: exits 0 (empty manifest key is not a surface)" "0" "$(tg "$J" HEAD 0.2.0)"
+( cd "$J/wt" && printf '0.1.0\n' > VERSION && commit_in_wt "$J" regressed )
+is "plain repo, VERSION regressed: exits 1" "1" "$(tg "$J" HEAD 0.2.0)"
+has "  names it" "$(cat "$J/tg-out")" "VERSION says 0.1.0 at HEAD, shipping v0.2.0"
+
 echo "== wiring: a healthy full ship still tags, and the gate ran at both call sites =="
 I="$TMP/ship"; rehearse "$I"
 rc=$(ship "$I" 0.2.0 'second')

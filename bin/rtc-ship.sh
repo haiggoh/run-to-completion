@@ -813,7 +813,11 @@ tag_gate() {  # tag_gate <repo> <ref> — exit 0 iff every declared surface at <
   r=$(cfg_get "roadmap" "")
   extras=$(cfg_get_raw "extra_version_surfaces" "")
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/rtc-tag-gate.XXXXXX")
-  local paths=("$m")
+  # An EXPLICITLY EMPTIED key ("manifest": "") means "this repo has no such surface" (the
+  # plain-repo convention) — the same reading version_gate gives. An empty path must never reach
+  # the extraction loop: `>"$tmp/"` is "Is a directory" (found by test_ship_any_checkout.sh).
+  local paths=()
+  [ -n "$m" ] && paths+=("$m")
   [ -n "$c" ] && paths+=("$c")
   [ -n "$vf" ] && paths+=("$vf")
   [ -n "$r" ] && paths+=("$r")
@@ -828,6 +832,7 @@ if not isinstance(a, list): a = []
 print("\n".join(e["path"] for e in a if isinstance(e, dict) and e.get("path")))' "$extras" 2>/dev/null)
   fi
   for p in "${paths[@]}"; do
+    [ -n "$p" ] || continue
     case "$p" in */*) mkdir -p "$tmp/${p%/*}" ;; esac
     if ! git -C "$repo" show "$ref:$p" >"$tmp/$p" 2>/dev/null; then
       echo "✖ $p is declared but ABSENT at $ref" >&2
@@ -835,17 +840,19 @@ print("\n".join(e["path"] for e in a if isinstance(e, dict) and e.get("path")))'
     fi
   done
   local mv cv vv rv ex_out ep ev
-  mv=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('version',''))" "$tmp/$m" 2>/dev/null || echo "")
-  cv=$(python3 "$RTC_SHIP_DIR/rtc_changelog.py" top "$tmp/$c" 2>/dev/null || true)
+  mv=""; [ -n "$m" ] && [ -f "$tmp/$m" ] && mv=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('version',''))" "$tmp/$m" 2>/dev/null || echo "")
+  cv=""; [ -n "$c" ] && [ -f "$tmp/$c" ] && cv=$(python3 "$RTC_SHIP_DIR/rtc_changelog.py" top "$tmp/$c" 2>/dev/null || true)
   vv=""; [ -n "$vf" ] && [ -f "$tmp/$vf" ] && vv=$(tr -d '[:space:]' < "$tmp/$vf")
   rv=""; [ -n "$r" ] && [ -f "$tmp/$r" ] && rv=$(roadmap_target "$tmp/$r" read)
   echo "  tag_gate @ $ref  (shipping ${PREFIX}${V}):"
-  echo "    $m : ${mv:-<none>}"
+  [ -n "$m" ] && echo "    $m : ${mv:-<none>}"
   [ -n "$c" ] && echo "    $c (top entry) : ${cv:-<none>}"
   [ -n "$vf" ] && echo "    $vf : ${vv:-<none>}"
   [ -n "$r" ] && echo "    $r : ${rv:-<none>}"
-  if [ -z "$mv" ]; then echo "✖ no version in $m at $ref" >&2; bad=1
-  elif [ "$mv" != "$V" ]; then echo "✖ $m says $mv at $ref, shipping ${PREFIX}${V}" >&2; bad=1; fi
+  if [ -n "$m" ]; then
+    if [ -z "$mv" ]; then echo "✖ no version in $m at $ref" >&2; bad=1
+    elif [ "$mv" != "$V" ]; then echo "✖ $m says $mv at $ref, shipping ${PREFIX}${V}" >&2; bad=1; fi
+  fi
   if [ -n "$c" ]; then
     if [ -z "$cv" ]; then echo "✖ no numbered heading in $c at $ref" >&2; bad=1
     elif [ "$cv" != "$V" ]; then echo "✖ $c top is $cv at $ref, shipping ${PREFIX}${V}" >&2; bad=1; fi
