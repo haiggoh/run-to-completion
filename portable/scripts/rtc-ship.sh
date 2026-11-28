@@ -733,7 +733,7 @@ version_gate() {
   fi
   # No repo test: check what the config declares. A repo that declares fewer surfaces than it has
   # will drift, but a repo that declares NONE gets a manifest+changelog check rather than nothing.
-  local manifest changelog vfile roadmap want mv cv vv rv
+  local manifest changelog vfile roadmap want mv cv vv rv anchor
   manifest=$(cfg_get "manifest" ".claude-plugin/plugin.json")
   changelog=$(cfg_get "changelog" "CHANGELOG.md")
   vfile=$(cfg_get "version_file" "")
@@ -756,7 +756,14 @@ version_gate() {
     # "<none>" and refused every plain repo without its own tests/test_version_consistency.sh.
     if [ -n "$vfile" ] && [ -f "$top/$vfile" ]; then mv="$vv"; else mv="$cv"; fi
   fi
-  echo "  $manifest : ${mv:-<none>}"
+  # The surface every other one is compared against, NAMED as what it is: on a plain repo it is
+  # the version file or the changelog, and calling it "manifest" (with an empty label line) sent
+  # readers looking for a plugin.json that does not exist (2026-11-28).
+  anchor=$manifest
+  if [ -z "$anchor" ]; then
+    if [ -n "$vfile" ] && [ -f "$top/$vfile" ]; then anchor=$vfile; else anchor=$changelog; fi
+  fi
+  [ -n "$manifest" ] && echo "  $manifest : ${mv:-<none>}"
   echo "  $changelog (top entry) : ${cv:-<none>}"
   [ -n "$vfile" ] && echo "  $vfile : ${vv:-<none>}"
   [ -n "$roadmap" ] && echo "  $roadmap : ${rv:-<none>}"
@@ -764,23 +771,23 @@ version_gate() {
   # An EMPTY extraction is a FAILURE, never a pass. A gate that cannot find its input and then
   # declares success is worse than no gate — it let a planted split through on the first run of
   # this script, because an unreadable changelog silently skipped its comparison.
-  if [ -z "$mv" ]; then echo "✖ no version in $manifest" >&2; bad=1; fi
+  if [ -z "$mv" ]; then echo "✖ no version in ${anchor:-<no anchor declared>}" >&2; bad=1; fi
   if [ -z "$changelog" ]; then
     # A repo may legitimately have no changelog at all (echoprism: package.json, no CHANGELOG.md).
     # Saying so beats failing on a file that was never promised.
     echo "  (no changelog declared — not checked)"
     cv=$mv
   elif [ -z "$cv" ]; then echo "✖ no numbered heading found in $changelog" >&2; bad=1
-  elif [ "$cv" != "$mv" ]; then echo "✖ changelog top is $cv, manifest says $mv" >&2; bad=1; fi
+  elif [ "$cv" != "$mv" ]; then echo "✖ changelog top is $cv, $anchor says $mv" >&2; bad=1; fi
   # A DECLARED surface that yields no version fails like the manifest and changelog do — the same
   # empty-extraction rule, which these two used to skip (2026-10-25 review).
   if [ -n "$vfile" ] && [ ! -f "$top/$vfile" ]; then echo "✖ $vfile is declared in the config but absent" >&2; bad=1
   elif [ -n "$vfile" ] && [ -z "$vv" ]; then echo "✖ $vfile is declared but holds no version" >&2; bad=1
-  elif [ -n "$vv" ] && [ "$vv" != "$mv" ]; then echo "✖ $vfile says $vv, manifest says $mv" >&2; bad=1; fi
+  elif [ -n "$vv" ] && [ "$vv" != "$mv" ]; then echo "✖ $vfile says $vv, $anchor says $mv" >&2; bad=1; fi
   if [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && [ -z "$rv" ]; then
     echo "✖ $roadmap is declared but holds no version" >&2; bad=1
   elif [ -n "$roadmap" ] && [ -f "$top/$roadmap" ] && [ "$rv" != "$mv" ]; then
-    echo "✖ $roadmap says $rv, manifest says $mv" >&2; bad=1
+    echo "✖ $roadmap says $rv, $anchor says $mv" >&2; bad=1
   fi
   # extra_version_surfaces read through the SAME resolver the bump writes with; a declared
   # surface that is absent or yields no version fails like every other surface.
@@ -792,7 +799,7 @@ version_gate() {
         [ -n "$ep" ] || continue
         echo "  $ep : ${ev:-<none>}"
         if [ -z "$ev" ]; then echo "✖ $ep is declared but holds no version" >&2; bad=1
-        elif [ "$ev" != "$mv" ]; then echo "✖ $ep says $ev, manifest says $mv" >&2; bad=1; fi
+        elif [ "$ev" != "$mv" ]; then echo "✖ $ep says $ev, $anchor says $mv" >&2; bad=1; fi
       done <<<"$ex_out"
     else
       echo "✖ extra_version_surfaces could not be read (declared surfaces must exist)" >&2; bad=1
@@ -1611,25 +1618,62 @@ published_surface() {  # the file on the default branch installers resolve for t
                       # the manifest for a plugin repo, the declared version_file for a plain
                       # repo ("manifest": "" — 1.6.3; such a repo has no plugin.json on the CDN,
                       # the old code fetched the empty path, got a 404, and read <nothing> forever)
-  local manifest
+  # A plain repo with NO version file anchors on its CHANGELOG — the same anchor version_gate uses,
+  # so the gate and the probe cannot disagree. The old unconditional "VERSION" default polled a
+  # file joyia-keyswitch never had (2026-11-28); VERSION stays the last resort only when no
+  # changelog is declared either.
+  local manifest vfile changelog
   manifest=$(cfg_get "manifest" ".claude-plugin/plugin.json")
   if [ -n "$manifest" ]; then printf '%s\n' "$manifest"; return 0; fi
-  cfg_get "version_file" "VERSION"
+  vfile=$(cfg_get "version_file" "")
+  if [ -n "$vfile" ]; then printf '%s\n' "$vfile"; return 0; fi
+  changelog=$(cfg_get "changelog" "CHANGELOG.md")
+  if [ -n "$changelog" ]; then printf '%s\n' "$changelog"; return 0; fi
+  printf '%s\n' "VERSION"
+}
+rtc_repo_private=""  # internal cache, filled in the MAIN shell before the poll loop (the probe
+                    # itself runs in $(...) subshells, where an assignment would not persist)
+repo_is_private() {  # 0 when GitHub says the origin repo is private.
+  # Any failure to ask (no gh, no auth, offline) reads as public: the raw CDN read below then
+  # behaves exactly as before this check existed.
+  if [ -z "$rtc_repo_private" ]; then
+    rtc_repo_private=$(gh api "repos/$(github_slug)" --jq .private 2>/dev/null || true)
+    [ "$rtc_repo_private" = true ] || rtc_repo_private=false
+  fi
+  [ "$rtc_repo_private" = true ]
 }
 published_version() {  # the version the PUBLISHED surface declares, or "" if it cannot be read
-  local body owner_repo surface manifest
+  local body owner_repo surface manifest vfile tmp
   owner_repo=$(github_slug)
   [ -n "$owner_repo" ] || return 0
   surface=$(published_surface)
   manifest=$(cfg_get "manifest" ".claude-plugin/plugin.json")
-  body=$(curl -fsS --max-time 20 \
-    "https://raw.githubusercontent.com/$owner_repo/$DEFAULT_BRANCH/$surface" 2>/dev/null) || body=""
-  if [ -z "$manifest" ]; then
-    # Plain repo: the surface IS the version file — its whole (trimmed) content is the version.
-    printf '%s\n' "$(printf '%s' "$body" | tr -d '[:space:]')"
+  if repo_is_private; then
+    # A PRIVATE repo has no public CDN copy: raw.githubusercontent.com 404s it unauthenticated,
+    # which failed every ship 6x after the tag was pushed (joyia-keyswitch, 2026-11-28). Its
+    # consumers read it authenticated, so the probe does too — still proving the default branch
+    # carries the new version.
+    body=$(gh api -H "Accept: application/vnd.github.raw" \
+      "repos/$owner_repo/contents/$surface?ref=$DEFAULT_BRANCH" 2>/dev/null) || body=""
+  else
+    body=$(curl -fsS --max-time 20 \
+      "https://raw.githubusercontent.com/$owner_repo/$DEFAULT_BRANCH/$surface" 2>/dev/null) || body=""
+  fi
+  if [ -n "$manifest" ]; then
+    printf '%s' "$body" | sed -n -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1
     return 0
   fi
-  printf '%s' "$body" | sed -n -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1
+  vfile=$(cfg_get "version_file" "")
+  if [ -z "$vfile" ] && [ "$surface" != "VERSION" ]; then
+    # Plain repo anchored on its CHANGELOG: the top entry, through the ONE fence-aware scanner.
+    tmp=$(mktemp "${TMPDIR:-/tmp}/rtc-published-changelog.XXXXXX")
+    printf '%s' "$body" > "$tmp"
+    python3 "$RTC_SHIP_DIR/rtc_changelog.py" top "$tmp" 2>/dev/null || true
+    rm -f "$tmp"
+    return 0
+  fi
+  # Plain repo with a version file: its whole (trimmed) content is the version.
+  printf '%s\n' "$(printf '%s' "$body" | tr -d '[:space:]')"
   return 0
 }
 
@@ -1639,6 +1683,7 @@ if [ "${RTC_TAG_VISIBILITY:-1}" = 1 ] && [ -z "$(github_slug)" ]; then
   # raw.githubusercontent.com, so this check cannot see what they see. Skip it OUT LOUD.
   phase "visibility check skipped: origin ($(git -C "$MAIN" config --get remote.origin.url)) is not a GitHub remote"
 elif [ "${RTC_TAG_VISIBILITY:-1}" = 1 ]; then
+  repo_is_private || true   # resolve once here, so every poll reuses the answer
   vis_tries=0
   while :; do
     got=$(published_version)
@@ -1647,7 +1692,11 @@ elif [ "${RTC_TAG_VISIBILITY:-1}" = 1 ]; then
     if [ "$vis_tries" -ge "${RTC_TAG_VISIBILITY_TRIES:-6}" ]; then
       echo "✖ the published surface ($(published_surface)) declares ${got:-<nothing>}, not $V — installers still resolve the old version" >&2
       echo "  the tag and the branch are pushed, but nothing is released yet. Re-check, then re-run:" >&2
-      echo "    curl -s https://raw.githubusercontent.com/<owner>/<repo>/$DEFAULT_BRANCH/$(published_surface)" >&2
+      if repo_is_private; then
+        echo "    gh api -H 'Accept: application/vnd.github.raw' repos/$(github_slug)/contents/$(published_surface)?ref=$DEFAULT_BRANCH" >&2
+      else
+        echo "    curl -s https://raw.githubusercontent.com/<owner>/<repo>/$DEFAULT_BRANCH/$(published_surface)" >&2
+      fi
       echo "    rtc-ship.sh $WT $V \"$TITLE\"" >&2
       exit 1
     fi

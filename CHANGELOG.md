@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.7.7] — 2026-11-28
+
+### Fixed — the post-tag visibility probe works for PRIVATE repos
+
+- A private GitHub repo has no public CDN copy: the probe curled raw.githubusercontent.com
+  unauthenticated, got 404 six times AFTER the tag was pushed, and failed the ship blaming
+  "installers" (joyia-keyswitch, 2026-11-28 — which had to document `RTC_TAG_VISIBILITY=0`).
+  The probe now asks GitHub once (`gh api repos/<slug> --jq .private`) and, for a private repo,
+  reads the published surface authenticated (`gh api …/contents/<path>?ref=<branch>`), still
+  proving the default branch carries the new version. Public repos keep the raw CDN read; a
+  failed privacy lookup reads as public (the old behaviour).
+
+### Fixed — a plain repo without a version file is probed on its CHANGELOG
+
+- `"manifest": ""` with no `version_file` polled an undeclared `VERSION` file that does not
+  exist. The published surface is now the declared version file, else the CHANGELOG top entry
+  (read through the fence-aware scanner) — the same anchor `version_gate` uses. Every plain repo
+  here that has a `VERSION` file declares it, so none changes behaviour.
+
+### Fixed — the gate names its real anchor on a plain repo
+
+- `version_gate` printed an empty-label line (`   : 0.1.2`) and said "… manifest says X" on
+  repos that have no manifest. It now names the anchor it compares against: the manifest, the
+  version file, or the CHANGELOG.
+
+Tests: `tests/test_ship_visibility_private.sh` (12 checks, red first; forcing "public" → 2 red);
+all shell suites 801 passed.
+
 ## [1.7.6] — 2026-11-28
 
 ### Added — `"kind": "regex"` extra version surface (a version that lives in source code)

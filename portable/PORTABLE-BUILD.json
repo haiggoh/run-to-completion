@@ -100,11 +100,11 @@
     }
   ],
   "files": {
-    ".claude-plugin/plugin.json": "8197fb4ae46a3b20650f8a017f810c6a49cce7ad8914d695bf87241e57893210",
+    ".claude-plugin/plugin.json": "c5219b80d7e64540fe43a2221eed2baf22a185293d93a92c381267afb057dda4",
     "hooks/check-tag-visibility.py": "15fcb5fffbcf5563643edfa8b2f41c8f00006e2dd5a8960d3aa909ac1e39b6e3",
     "hooks/hooks.json": "c8934e1793d3f85e66ef7a45ccdc645f551421bd75384c2b33b28e723baf4588",
     "hooks/nudge.sh": "21e7399a8ff4424d78a1d481711a81184f9f7dc1817ce4fba25ee2e01cf08457",
-    "scripts/rtc-ship.sh": "75b9a4632572bf74175dee28b174a9100de160657bf80916d80d7d47fdddc569",
+    "scripts/rtc-ship.sh": "3384818f15974999688228094cf6a2a7e94e08cae49b2542ef34a1d8eb0d47bd",
     "scripts/rtc_changelog.py": "9f48aa49ae1082c9d2a797d82211ecafc323d1610ea514467f84756d409d32aa",
     "scripts/rtc_version_surface.py": "f4ddab237ed547daab0ad8447dd0b230aeacab85b27d7851e2b4e9a9c4d819c2",
     "skills/autopilot/SKILL.md": "0de6b9372e291acdfdba72089ba5d15affba93472e1af574ac5e060bc9d4e94e",
@@ -118,7 +118,7 @@
     "skills/ungate-queue/SKILL.md": "aa49963534e95785908b87d25d7739b0c5a95f5b1c6c9b11a2e53fe8d0e652e4"
   },
   "schema": "haiggoh-portable-build/1",
-  "source_commit": "2e44072c081b83515f77a0cf0148852754121c97",
+  "source_commit": "81e37012001efb7c6c57e2a8ea48550657f8b541",
   "source_repo": "haiggoh/run-to-completion",
   "transform_version": "1"
 }
